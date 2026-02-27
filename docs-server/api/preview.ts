@@ -252,6 +252,29 @@ async function shouldRunDiff(workDir: string): Promise<boolean> {
   }
 }
 
+async function lookupPullRequest(
+  owner: string,
+  repo: string,
+  ref: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/pulls?head=${owner}:${ref}&state=open&per_page=1`,
+      {
+        headers: {
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "elm-docs-server",
+        },
+      }
+    );
+    if (!res.ok) return null;
+    const pulls = (await res.json()) as Array<{ html_url: string }>;
+    return pulls.length > 0 ? pulls[0].html_url : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildDiff(workDir: string): ApiDiff | null {
   try {
     const elm = elmBinPath();
@@ -306,17 +329,21 @@ export default async function handler(
     const workDir = await downloadAndExtract(owner, repo, sha);
     console.log(`Source ready at ${workDir}`);
 
-    // Step 3: Build docs
+    // Step 3: Build docs + look up PR in parallel
     const docs = buildDocs(workDir);
     console.log(`Docs built successfully`);
 
-    // Step 4: Build diff (best-effort, null on failure)
+    // Step 4: Build diff (best-effort, null on failure) + PR lookup
     // Skip diff for historical commits where a newer version is already published,
     // since elm diff compares against the latest published version and would
     // produce confusing reverse results.
-    const runDiff = await shouldRunDiff(workDir);
+    const [runDiff, pullRequestUrl] = await Promise.all([
+      shouldRunDiff(workDir),
+      lookupPullRequest(owner, repo, ref),
+    ]);
     const diff = runDiff ? buildDiff(workDir) : null;
     console.log(`Diff: ${runDiff ? (diff ? diff.magnitude : "no changes") : "skipped (historical commit)"}`);
+    console.log(`PR: ${pullRequestUrl || "none"}`);
 
     // If the ref is a full commit SHA, cache forever (immutable).
     // Otherwise (branch/tag), use a short TTL so new pushes are picked up.
@@ -327,7 +354,7 @@ export default async function handler(
       res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
     }
 
-    return res.status(200).json({ docs, diff });
+    return res.status(200).json({ docs, diff, pullRequestUrl });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`Error: ${message}`);

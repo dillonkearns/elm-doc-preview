@@ -66,6 +66,7 @@ type alias Preview =
 type alias RepoDocsResponse =
     { docs : Docs
     , diff : Maybe ApiDiff
+    , pullRequestUrl : Maybe String
     }
 
 
@@ -309,9 +310,10 @@ fetchRepoDocs toMsg owner repo ref =
 
 repoDocsResponseDecoder : Decoder RepoDocsResponse
 repoDocsResponseDecoder =
-    Decode.map2 RepoDocsResponse
+    Decode.map3 RepoDocsResponse
         (Decode.field "docs" docsDecoder)
         (Decode.field "diff" ApiDiff.decoder)
+        (Decode.maybe (Decode.field "pullRequestUrl" Decode.string))
 
 
 

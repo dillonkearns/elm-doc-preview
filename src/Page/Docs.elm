@@ -62,6 +62,7 @@ type alias Model =
     , manifest : Status Project
     , diffData : Maybe ApiDiff
     , diffMode : Bool
+    , pullRequestUrl : Maybe String
     }
 
 
@@ -95,10 +96,10 @@ init session author project version focus =
                     Release.getLatest releases
             in
             getInfo latest <|
-                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
+                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing
 
         Nothing ->
-            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
+            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing
             , Session.fetchReleases GotReleases author project
             )
 
@@ -112,12 +113,12 @@ initRepo session owner repo ref focus =
     in
     case Session.getRepoDocs session owner repo ref of
         Just docs ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff (restoredDiff /= Nothing)
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff (restoredDiff /= Nothing) Nothing
             , scrollIfNeeded focus
             )
 
         Nothing ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False Nothing
             , Session.fetchRepoDocs GotRepoDocs owner repo ref
             )
 
@@ -294,6 +295,7 @@ update msg model =
                         | docs = Success response.docs
                         , diffData = response.diff
                         , diffMode = response.diff /= Nothing
+                        , pullRequestUrl = response.pullRequestUrl
                         , session = Session.addRepoDocs model.author model.project ref response model.session
                       }
                     , scrollIfNeeded model.focus
@@ -666,9 +668,13 @@ viewDiffSidebar model diff =
 
                 _ ->
                     "diff-magnitude diff-magnitude-patch"
+
+        query =
+            model.query |> String.toLower |> String.trim
     in
     div [ class "diff-sidebar" ]
-        [ h2 []
+        [ viewPullRequestLink model.pullRequestUrl
+        , h2 []
             [ text "API Diff "
             , span [ class magnitudeClass ] [ text diff.magnitude ]
             ]
@@ -677,11 +683,97 @@ viewDiffSidebar model diff =
 
           else
             div []
-                (viewDiffAddedModules model diff.addedModules
-                    ++ viewDiffRemovedModules diff.removedModules
-                    ++ List.concatMap (viewDiffChangedModule model) diff.changedModules
-                )
+                [ input
+                    [ placeholder "Search"
+                    , value model.query
+                    , onInput QueryChanged
+                    ]
+                    []
+                , div []
+                    (viewFilteredDiffAddedModules model query diff.addedModules
+                        ++ viewFilteredDiffRemovedModules query diff.removedModules
+                        ++ List.concatMap (viewFilteredDiffChangedModule model query) diff.changedModules
+                    )
+                ]
         ]
+
+
+viewPullRequestLink : Maybe String -> Html msg
+viewPullRequestLink maybePrUrl =
+    case maybePrUrl of
+        Just prUrl ->
+            a
+                [ href prUrl
+                , class "pkg-nav-module"
+                , target "_blank"
+                ]
+                [ text "View Pull Request" ]
+
+        Nothing ->
+            text ""
+
+
+viewFilteredDiffAddedModules : Model -> String -> List String -> List (Html Msg)
+viewFilteredDiffAddedModules model query modules =
+    let
+        filtered =
+            if String.isEmpty query then
+                modules
+
+            else
+                List.filter (\name -> String.contains query (String.toLower name)) modules
+    in
+    viewDiffAddedModules model filtered
+
+
+viewFilteredDiffRemovedModules : String -> List String -> List (Html msg)
+viewFilteredDiffRemovedModules query modules =
+    let
+        filtered =
+            if String.isEmpty query then
+                modules
+
+            else
+                List.filter (\name -> String.contains query (String.toLower name)) modules
+    in
+    viewDiffRemovedModules filtered
+
+
+viewFilteredDiffChangedModule : Model -> String -> ApiDiff.ModuleChanges -> List (Html Msg)
+viewFilteredDiffChangedModule model query mc =
+    if String.isEmpty query then
+        viewDiffChangedModule model mc
+
+    else
+        let
+            nameMatches =
+                String.contains query (String.toLower mc.name)
+
+            filteredMc =
+                if nameMatches then
+                    mc
+
+                else
+                    filterChangedModule query mc
+        in
+        if nameMatches || not (List.isEmpty filteredMc.added && List.isEmpty filteredMc.changed && List.isEmpty filteredMc.removed) then
+            viewDiffChangedModule model filteredMc
+
+        else
+            []
+
+
+filterChangedModule : String -> ApiDiff.ModuleChanges -> ApiDiff.ModuleChanges
+filterChangedModule query mc =
+    let
+        matchItem name =
+            String.contains query (String.toLower name)
+    in
+    { mc
+        | added = List.filter matchItem mc.added
+        , changed = List.filter matchItem mc.changed
+        , removed = List.filter matchItem mc.removed
+    }
 
 
 viewDiffAddedModules : Model -> List String -> List (Html Msg)
