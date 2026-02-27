@@ -188,7 +188,7 @@ scrollIfNeeded focus =
 type Msg
     = QueryChanged String
     | ScrollAttempted (Result Dom.Error ())
-    | ToggleDiffMode
+    | SetDiffMode Bool
     | GotReleases (Result Http.Error (OneOrMore Release.Release))
     | GotReadme Version (Result Http.Error String)
     | GotDocs Version (Result Http.Error Docs)
@@ -210,8 +210,8 @@ update msg model =
             , Cmd.none
             )
 
-        ToggleDiffMode ->
-            ( { model | diffMode = not model.diffMode }
+        SetDiffMode diffMode ->
+            ( { model | diffMode = diffMode }
             , Cmd.none
             )
 
@@ -594,22 +594,23 @@ findModule name docsList =
 
 viewSidebar : Model -> Html Msg
 viewSidebar model =
+    let
+        content =
+            if model.diffMode then
+                case model.diffData of
+                    Just diff ->
+                        [ viewDiffSidebar model diff ]
+
+                    Nothing ->
+                        viewNormalSidebar model
+
+            else
+                viewNormalSidebar model
+    in
     div
         [ class "pkg-nav"
         ]
-        (viewDiffToggle model.diffData
-            :: (if model.diffMode then
-                    case model.diffData of
-                        Just diff ->
-                            [ viewDiffSidebar model diff ]
-
-                        Nothing ->
-                            viewNormalSidebar model
-
-                else
-                    viewNormalSidebar model
-               )
-        )
+        (viewSidebarTabs model ++ content)
 
 
 viewNormalSidebar : Model -> List (Html Msg)
@@ -637,47 +638,60 @@ viewNormalSidebar model =
     ]
 
 
-viewDiffToggle : Maybe ApiDiff -> Html Msg
-viewDiffToggle maybeDiff =
-    case maybeDiff of
+viewSidebarTabs : Model -> List (Html Msg)
+viewSidebarTabs model =
+    case model.diffData of
         Just diff ->
-            if ApiDiff.hasChanges diff then
-                button
-                    [ class "diff-toggle"
-                    , onClick ToggleDiffMode
+            [ div [ class "sidebar-tabs" ]
+                [ button
+                    [ classList
+                        [ ( "sidebar-tab", True )
+                        , ( "sidebar-tab-active", not model.diffMode )
+                        ]
+                    , onClick (SetDiffMode False)
                     ]
-                    [ text "Toggle API Diff" ]
-
-            else
-                text ""
+                    [ text "Docs" ]
+                , button
+                    [ classList
+                        [ ( "sidebar-tab", True )
+                        , ( "sidebar-tab-active", model.diffMode )
+                        ]
+                    , onClick (SetDiffMode True)
+                    ]
+                    [ text "Diff"
+                    , text " "
+                    , span [ class (diffMagnitudeClass diff.magnitude) ] [ text diff.magnitude ]
+                    ]
+                ]
+            ]
 
         Nothing ->
-            text ""
+            []
+
+
+diffMagnitudeClass : String -> String
+diffMagnitudeClass magnitude =
+    case magnitude of
+        "MAJOR" ->
+            "diff-magnitude diff-magnitude-major"
+
+        "MINOR" ->
+            "diff-magnitude diff-magnitude-minor"
+
+        _ ->
+            "diff-magnitude diff-magnitude-patch"
 
 
 viewDiffSidebar : Model -> ApiDiff -> Html Msg
 viewDiffSidebar model diff =
     let
-        magnitudeClass =
-            case diff.magnitude of
-                "MAJOR" ->
-                    "diff-magnitude diff-magnitude-major"
-
-                "MINOR" ->
-                    "diff-magnitude diff-magnitude-minor"
-
-                _ ->
-                    "diff-magnitude diff-magnitude-patch"
-
         query =
             model.query |> String.toLower |> String.trim
     in
     div [ class "diff-sidebar" ]
         [ viewPullRequestLink model.pullRequestUrl
         , h2 []
-            [ text "API Diff "
-            , span [ class magnitudeClass ] [ text diff.magnitude ]
-            ]
+            [ text "Diff" ]
         , if not (ApiDiff.hasChanges diff) then
             p [] [ text "No API changes" ]
 

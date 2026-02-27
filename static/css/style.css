@@ -387,22 +387,35 @@ Not really any of those on the website though AFAIK.
 
 /* DIFF MODE */
 
-.diff-toggle {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
+.sidebar-tabs {
+  display: flex;
+  gap: 8px;
   margin-bottom: 12px;
-  font-size: 0.9em;
+}
+
+.sidebar-tab {
+  flex: 1;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  font-size: 0.85em;
   font-family: inherit;
   color: #1184ce;
-  background-color: #f0f8ff;
-  border: 1px solid #1184ce;
+  background-color: #f7fbff;
+  border: 1px solid #d8e9f5;
   border-radius: 6px;
   cursor: pointer;
 }
 
-.diff-toggle:hover {
+.sidebar-tab:hover {
+  background-color: #edf6fd;
+}
+
+.sidebar-tab-active {
   background-color: #e0f0ff;
+  border-color: #1184ce;
 }
 
 /* Doc block annotations */
