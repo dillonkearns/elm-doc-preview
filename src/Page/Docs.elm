@@ -2,7 +2,7 @@ module Page.Docs exposing
     ( Focus(..), Model, Msg
     , init, initRepo, update, view
     , toTitle
-    , updateReadme, updateDocs, updateManifest, updateDiff
+    , updateReadme, updateDocs, updateManifest, updateDiff, updateContentDiff
     )
 
 {-|
@@ -10,12 +10,13 @@ module Page.Docs exposing
 @docs Focus, Model, Msg
 @docs init, initRepo, update, view
 @docs toTitle
-@docs updateReadme, updateDocs, updateManifest, updateDiff
+@docs updateReadme, updateDocs, updateManifest, updateDiff, updateContentDiff
 
 -}
 
 import ApiDiff exposing (ApiDiff, DiffStatus(..))
 import Browser.Dom as Dom
+import ContentDiff exposing (ContentDiff)
 import DateFormat
 import Elm.Constraint as Constraint exposing (Constraint)
 import Elm.Docs as Docs
@@ -63,6 +64,7 @@ type alias Model =
     , diffData : Maybe ApiDiff
     , diffMode : Bool
     , pullRequestUrl : Maybe String
+    , contentDiff : Maybe ContentDiff
     }
 
 
@@ -96,10 +98,10 @@ init session author project version focus =
                     Release.getLatest releases
             in
             getInfo latest <|
-                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing
+                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing Nothing
 
         Nothing ->
-            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing
+            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing Nothing
             , Session.fetchReleases GotReleases author project
             )
 
@@ -113,12 +115,12 @@ initRepo session owner repo ref focus =
     in
     case Session.getRepoDocs session owner repo ref of
         Just docs ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff (restoredDiff /= Nothing) Nothing
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff (restoredDiff /= Nothing) Nothing Nothing
             , scrollIfNeeded focus
             )
 
         Nothing ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False Nothing
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False Nothing Nothing
             , Session.fetchRepoDocs GotRepoDocs owner repo ref
             )
 
@@ -296,6 +298,7 @@ update msg model =
                         , diffData = response.diff
                         , diffMode = response.diff /= Nothing
                         , pullRequestUrl = response.pullRequestUrl
+                        , contentDiff = response.contentDiff
                         , session = Session.addRepoDocs model.author model.project ref response model.session
                       }
                     , scrollIfNeeded model.focus
@@ -364,6 +367,12 @@ updateDiff author project version maybeDiff model =
 
     else
         model
+
+
+{-| -}
+updateContentDiff : Maybe ContentDiff -> Model -> Model
+updateContentDiff maybeContentDiff model =
+    { model | contentDiff = maybeContentDiff }
 
 
 
@@ -506,21 +515,34 @@ viewContent model =
                     lazy Utils.Error.view error
 
                 _ ->
-                    lazy viewReadme model.readme
+                    viewReadme model.readme model.diffMode model.contentDiff
 
         Module name tag ->
-            viewModule model.author model.project model.version name model.docs model.diffData model.diffMode
+            viewModule model.author model.project model.version name model.docs model.diffData model.diffMode model.contentDiff
 
 
 
 -- VIEW README
 
 
-viewReadme : Status String -> Html msg
-viewReadme status =
+viewReadme : Status String -> Bool -> Maybe ContentDiff -> Html msg
+viewReadme status diffMode maybeContentDiff =
     case status of
         Success readme ->
-            div [ class "block-list" ] [ Markdown.block readme ]
+            let
+                readmeDiffView =
+                    if diffMode then
+                        case maybeContentDiff |> Maybe.andThen ContentDiff.getReadmeDiff of
+                            Just diffLines ->
+                                [ viewDiffBlock diffLines ]
+
+                            Nothing ->
+                                []
+
+                    else
+                        []
+            in
+            div [ class "block-list" ] (readmeDiffView ++ [ Markdown.block readme ])
 
         Loading ->
             Utils.Spinner.view
@@ -533,11 +555,38 @@ viewReadme status =
 
 
 
+viewDiffBlock : List ContentDiff.DiffLine -> Html msg
+viewDiffBlock lines =
+    pre [ class "diff-view" ]
+        (List.map viewDiffLine lines)
+
+
+viewDiffLine : ContentDiff.DiffLine -> Html msg
+viewDiffLine { status, content } =
+    let
+        ( lineClass, prefix ) =
+            case status of
+                ContentDiff.DiffAdded ->
+                    ( "diff-line diff-line-added", "+ " )
+
+                ContentDiff.DiffRemoved ->
+                    ( "diff-line diff-line-removed", "- " )
+
+                ContentDiff.DiffContext ->
+                    ( "diff-line diff-line-context", "  " )
+    in
+    div [ class lineClass ]
+        [ span [ class "diff-line-prefix" ] [ text prefix ]
+        , text content
+        ]
+
+
+
 -- VIEW MODULE
 
 
-viewModule : String -> String -> Maybe Version -> String -> Status Docs -> Maybe ApiDiff -> Bool -> Html msg
-viewModule author project version name status diffData diffMode =
+viewModule : String -> String -> Maybe Version -> String -> Status Docs -> Maybe ApiDiff -> Bool -> Maybe ContentDiff -> Html msg
+viewModule author project version name status diffData diffMode contentDiff =
     case status of
         Success (Modules allDocs) ->
             case findModule name allDocs of
@@ -547,7 +596,7 @@ viewModule author project version name status diffData diffMode =
                             h1 [ class "block-list-title" ] [ text name ]
 
                         info =
-                            Block.makeInfo author project version name allDocs diffData diffMode
+                            Block.makeInfo author project version name allDocs diffData diffMode contentDiff
 
                         blocks =
                             List.map (Block.view info) (Docs.toBlocks docs)

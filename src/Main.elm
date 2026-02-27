@@ -9,6 +9,7 @@ module Main exposing (main)
 import ApiDiff
 import Browser
 import Browser.Navigation as Nav
+import ContentDiff
 import Elm.Project as Project exposing (Project)
 import Elm.Version as Version exposing (Version)
 import Json.Decode as Decode
@@ -304,7 +305,7 @@ updatePageManifest author project version manifest model =
 
 
 updateDiff : Ports.Diff -> Model -> Model
-updateDiff { author, project, version, diff } model =
+updateDiff { author, project, version, diff, contentDiff } model =
     case Version.fromString version of
         Just v ->
             let
@@ -315,23 +316,32 @@ updateDiff { author, project, version, diff } model =
 
                         Err _ ->
                             Nothing
+
+                maybeContentDiff =
+                    case Decode.decodeValue ContentDiff.decoder contentDiff of
+                        Ok d ->
+                            d
+
+                        Err _ ->
+                            Nothing
             in
-            updatePageDiff author project v maybeDiff model
+            updatePageDiff author project v maybeDiff maybeContentDiff model
 
         Nothing ->
             model
 
 
-updatePageDiff : String -> String -> Version -> Maybe ApiDiff.ApiDiff -> Model -> Model
-updatePageDiff author project version maybeDiff model =
+updatePageDiff : String -> String -> Version -> Maybe ApiDiff.ApiDiff -> Maybe ContentDiff.ContentDiff -> Model -> Model
+updatePageDiff author project version maybeDiff maybeContentDiff model =
     let
         newSession =
             Session.addDiff maybeDiff (exit model)
+                |> Session.addContentDiff maybeContentDiff
 
         newPage =
             case model.page of
                 Docs m ->
-                    Docs (Docs.updateDiff author project version maybeDiff { m | session = newSession })
+                    Docs (Docs.updateContentDiff maybeContentDiff (Docs.updateDiff author project version maybeDiff { m | session = newSession }))
 
                 _ ->
                     setPageSession newSession model.page

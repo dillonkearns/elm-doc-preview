@@ -4,10 +4,12 @@
     "node": ">=20"
   },
   "dependencies": {
+    "diff": "^7.0.0",
     "elm": "0.19.1-6",
     "tar": "^6.2.1"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/tar": "^6.1.13",
     "@vercel/node": "^3.0.0",
     "typescript": "^5.7.0"

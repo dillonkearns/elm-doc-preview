@@ -1,6 +1,6 @@
 module Session exposing
     ( Data, Docs(..), Preview, RepoDocsResponse, empty
-    , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
+    , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff, addContentDiff
     , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
     , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
     , addRepoDocs
@@ -10,7 +10,7 @@ module Session exposing
 {-|
 
 @docs Data, Docs, Preview, RepoDocsResponse, empty
-@docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
+@docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff, addContentDiff
 @docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
 @docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
 @docs addRepoDocs
@@ -19,6 +19,7 @@ module Session exposing
 -}
 
 import ApiDiff exposing (ApiDiff)
+import ContentDiff exposing (ContentDiff)
 import Dict exposing (Dict)
 import Elm.Docs as Docs
 import Elm.Error exposing (Error)
@@ -46,6 +47,7 @@ type alias Data =
     , manifests : Dict.Dict String Project
     , preview : Maybe Preview
     , diff : Maybe ApiDiff
+    , contentDiff : Maybe ContentDiff
     }
 
 
@@ -67,6 +69,7 @@ type alias RepoDocsResponse =
     { docs : Docs
     , diff : Maybe ApiDiff
     , pullRequestUrl : Maybe String
+    , contentDiff : Maybe ContentDiff
     }
 
 
@@ -80,6 +83,7 @@ empty =
     , manifests = Dict.empty
     , preview = Nothing
     , diff = Nothing
+    , contentDiff = Nothing
     }
 
 
@@ -296,7 +300,7 @@ addRepoDocs owner repo ref response data =
         newDocs =
             Dict.insert (toRefKey owner repo ref) response.docs data.docs
     in
-    { data | docs = newDocs, diff = response.diff }
+    { data | docs = newDocs, diff = response.diff, contentDiff = response.contentDiff }
 
 
 {-| -}
@@ -310,10 +314,15 @@ fetchRepoDocs toMsg owner repo ref =
 
 repoDocsResponseDecoder : Decoder RepoDocsResponse
 repoDocsResponseDecoder =
-    Decode.map3 RepoDocsResponse
+    Decode.map4 RepoDocsResponse
         (Decode.field "docs" docsDecoder)
         (Decode.field "diff" ApiDiff.decoder)
         (Decode.maybe (Decode.field "pullRequestUrl" Decode.string))
+        (Decode.oneOf
+            [ Decode.field "contentDiff" ContentDiff.decoder
+            , Decode.succeed Nothing
+            ]
+        )
 
 
 
@@ -330,3 +339,9 @@ getDiff data =
 addDiff : Maybe ApiDiff -> Data -> Data
 addDiff maybeDiff data =
     { data | diff = maybeDiff }
+
+
+{-| -}
+addContentDiff : Maybe ContentDiff -> Data -> Data
+addContentDiff maybeContentDiff data =
+    { data | contentDiff = maybeContentDiff }

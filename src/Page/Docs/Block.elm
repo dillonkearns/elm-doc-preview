@@ -7,6 +7,7 @@ module Page.Docs.Block exposing (Info, makeInfo, view)
 -}
 
 import ApiDiff exposing (ApiDiff, DiffStatus(..))
+import ContentDiff exposing (ContentDiff, ItemContentDiff)
 import Dict
 import Elm.Docs as Docs
 import Elm.Type as Type
@@ -63,8 +64,14 @@ view info block =
 viewCodeBlock : Info -> String -> String -> List (Line msg) -> Html msg
 viewCodeBlock info name comment header =
     let
+        apiDiffStatus =
+            info.diffStatus name
+
+        maybeItemDiff =
+            info.contentDiff name
+
         diffClass =
-            case info.diffStatus name of
+            case apiDiffStatus of
                 Added ->
                     "diff-added"
 
@@ -75,11 +82,57 @@ viewCodeBlock info name comment header =
                     "diff-added"
 
                 Unchanged ->
-                    ""
+                    if maybeItemDiff /= Nothing then
+                        "diff-docs-changed"
+
+                    else
+                        ""
+
+        oldAnnotationView =
+            case maybeItemDiff |> Maybe.andThen .oldAnnotation of
+                Just old ->
+                    [ div [ class "diff-old-annotation" ] [ text old ] ]
+
+                Nothing ->
+                    []
+
+        commentView =
+            case maybeItemDiff |> Maybe.andThen .commentDiff of
+                Just diffLines ->
+                    [ viewDiffBlock diffLines ]
+
+                Nothing ->
+                    [ Markdown.block comment ]
     in
     div [ class "docs-block", class diffClass, id name ]
-        [ div [ class "docs-header" ] (List.map (div []) header)
-        , div [ class "docs-comment" ] [ Markdown.block comment ]
+        [ div [ class "docs-header" ] (oldAnnotationView ++ List.map (div []) header)
+        , div [ class "docs-comment" ] commentView
+        ]
+
+
+viewDiffBlock : List ContentDiff.DiffLine -> Html msg
+viewDiffBlock lines =
+    pre [ class "diff-view" ]
+        (List.map viewDiffLine lines)
+
+
+viewDiffLine : ContentDiff.DiffLine -> Html msg
+viewDiffLine { status, content } =
+    let
+        ( lineClass, prefix ) =
+            case status of
+                ContentDiff.DiffAdded ->
+                    ( "diff-line diff-line-added", "+ " )
+
+                ContentDiff.DiffRemoved ->
+                    ( "diff-line diff-line-removed", "- " )
+
+                ContentDiff.DiffContext ->
+                    ( "diff-line diff-line-context", "  " )
+    in
+    div [ class lineClass ]
+        [ span [ class "diff-line-prefix" ] [ text prefix ]
+        , text content
         ]
 
 
@@ -201,6 +254,7 @@ type alias Info =
     , moduleName : String
     , typeNameDict : TypeNameDict
     , diffStatus : String -> DiffStatus
+    , contentDiff : String -> Maybe ItemContentDiff
     }
 
 
@@ -209,8 +263,8 @@ type alias TypeNameDict =
 
 
 {-| -}
-makeInfo : String -> String -> Maybe V.Version -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Info
-makeInfo author project version moduleName docsList maybeDiff diffMode =
+makeInfo : String -> String -> Maybe V.Version -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Maybe ContentDiff -> Info
+makeInfo author project version moduleName docsList maybeDiff diffMode maybeContentDiff =
     let
         addUnion home union docs =
             Dict.insert (home ++ "." ++ union.name) ( home, union.name ) docs
@@ -225,10 +279,19 @@ makeInfo author project version moduleName docsList maybeDiff diffMode =
 
                 _ ->
                     \_ -> Unchanged
+
+        contentDiffFn =
+            case ( diffMode, maybeContentDiff ) of
+                ( True, Just cd ) ->
+                    \name -> ContentDiff.lookupItem cd moduleName name
+
+                _ ->
+                    \_ -> Nothing
     in
     Info author project version moduleName
         (List.foldl addModule Dict.empty docsList)
         statusFn
+        contentDiffFn
 
 
 

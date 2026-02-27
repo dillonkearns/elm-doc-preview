@@ -48,6 +48,7 @@ type alias Diff =
     , project : String
     , version : String
     , diff : Encode.Value
+    , contentDiff : Encode.Value
     }
 
 

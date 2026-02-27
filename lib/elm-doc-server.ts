@@ -15,6 +15,7 @@ import chokidar from "chokidar";
 import open from "open";
 import { fileURLToPath } from "url";
 import { version } from "./version.js";
+import { diffLines } from "diff";
 
 import util from "util";
 const readFileAsync = util.promisify(fs.readFile);
@@ -673,6 +674,257 @@ function buildDiff(elm: Elm): ApiDiff | null {
   }
 }
 
+
+// -- Content diff (doc comments + README) --
+
+interface DocsModule {
+  name: string;
+  comment: string;
+  unions: Array<{ name: string; comment: string; args: string[]; cases: Array<[string, string[]]> }>;
+  aliases: Array<{ name: string; comment: string; args: string[]; type: string }>;
+  values: Array<{ name: string; comment: string; type: string }>;
+  binops: Array<{ name: string; comment: string; type: string; associativity: string; precedence: number }>;
+}
+
+type DiffLine = [number, string];
+
+interface ItemContentDiff {
+  commentDiff?: DiffLine[];
+  oldAnnotation?: string;
+}
+
+interface ModuleContentDiff {
+  items: Record<string, ItemContentDiff>;
+}
+
+interface ContentDiff {
+  modules: Record<string, ModuleContentDiff>;
+  readmeDiff?: DiffLine[];
+}
+
+function compareVersionsLocal(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] < pb[i]) return -1;
+    if (pa[i] > pb[i]) return 1;
+  }
+  return 0;
+}
+
+function getLatestPublishedVersion(elmCache: string, packageName: string): string | null {
+  try {
+    const [author, project] = packageName.split("/", 2);
+    const pkgDir = path.join(elmCache, author, project);
+    if (!fs.existsSync(pkgDir)) return null;
+
+    const versions = fs.readdirSync(pkgDir).filter((v) => /^\d+\.\d+\.\d+$/.test(v));
+    if (versions.length === 0) return null;
+
+    return versions.sort(compareVersionsLocal).pop()!;
+  } catch {
+    return null;
+  }
+}
+
+function loadPublishedDocs(elmCache: string, name: string, version: string): DocsModule[] | null {
+  try {
+    const docsPath = path.join(elmCache, name, version, "docs.json");
+    if (!fs.existsSync(docsPath)) return null;
+    return JSON.parse(fs.readFileSync(docsPath, "utf-8")) as DocsModule[];
+  } catch {
+    return null;
+  }
+}
+
+function loadPublishedReadme(elmCache: string, name: string, version: string): string | null {
+  try {
+    const readmePath = path.join(elmCache, name, version, "README.md");
+    if (!fs.existsSync(readmePath)) return null;
+    return fs.readFileSync(readmePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function computeLineDiff(oldText: string, newText: string): DiffLine[] | null {
+  const changes = diffLines(oldText, newText);
+  const hasChanges = changes.some((c) => c.added || c.removed);
+  if (!hasChanges) return null;
+
+  const result: DiffLine[] = [];
+  for (const change of changes) {
+    const status = change.added ? 1 : change.removed ? -1 : 0;
+    const lines = change.value.replace(/\n$/, "").split("\n");
+    for (const line of lines) {
+      result.push([status, line]);
+    }
+  }
+  return result;
+}
+
+function formatAnnotation(item: { name: string; type: string }): string {
+  return `${item.name} : ${item.type}`;
+}
+
+function formatAliasAnnotation(alias: { name: string; args: string[]; type: string }): string {
+  const argsStr = alias.args.length > 0 ? " " + alias.args.join(" ") : "";
+  return `type alias ${alias.name}${argsStr} = ${alias.type}`;
+}
+
+function formatUnionAnnotation(union: { name: string; args: string[]; cases: Array<[string, string[]]> }): string {
+  const argsStr = union.args.length > 0 ? " " + union.args.join(" ") : "";
+  const ctors = union.cases.map(([name, types]) => {
+    if (types.length === 0) return name;
+    return name + " " + types.join(" ");
+  }).join(" | ");
+  return `type ${union.name}${argsStr} = ${ctors}`;
+}
+
+function computeContentDiff(
+  publishedDocs: DocsModule[] | null,
+  currentDocs: DocsModule[] | null,
+  publishedReadme: string | null,
+  currentReadme: string | null
+): ContentDiff | null {
+  if (!publishedDocs || !currentDocs) return null;
+
+  const publishedByName = new Map<string, DocsModule>();
+  for (const mod of publishedDocs) {
+    publishedByName.set(mod.name, mod);
+  }
+
+  const diff: ContentDiff = { modules: {} };
+  let hasAnyDiff = false;
+
+  for (const currentMod of currentDocs) {
+    const publishedMod = publishedByName.get(currentMod.name);
+    if (!publishedMod) continue;
+
+    const moduleDiff: ModuleContentDiff = { items: {} };
+    let moduleHasDiff = false;
+
+    for (const currentVal of currentMod.values) {
+      const publishedVal = publishedMod.values.find((v) => v.name === currentVal.name);
+      if (!publishedVal) continue;
+
+      const itemDiff: ItemContentDiff = {};
+      let itemHasDiff = false;
+
+      if (publishedVal.comment !== currentVal.comment) {
+        const commentDiff = computeLineDiff(publishedVal.comment, currentVal.comment);
+        if (commentDiff) {
+          itemDiff.commentDiff = commentDiff;
+          itemHasDiff = true;
+        }
+      }
+
+      if (publishedVal.type !== currentVal.type) {
+        itemDiff.oldAnnotation = formatAnnotation(publishedVal);
+        itemHasDiff = true;
+      }
+
+      if (itemHasDiff) {
+        moduleDiff.items[currentVal.name] = itemDiff;
+        moduleHasDiff = true;
+      }
+    }
+
+    for (const currentBinop of currentMod.binops) {
+      const publishedBinop = publishedMod.binops.find((b) => b.name === currentBinop.name);
+      if (!publishedBinop) continue;
+
+      const itemDiff: ItemContentDiff = {};
+      let itemHasDiff = false;
+
+      if (publishedBinop.comment !== currentBinop.comment) {
+        const commentDiff = computeLineDiff(publishedBinop.comment, currentBinop.comment);
+        if (commentDiff) {
+          itemDiff.commentDiff = commentDiff;
+          itemHasDiff = true;
+        }
+      }
+
+      if (publishedBinop.type !== currentBinop.type) {
+        itemDiff.oldAnnotation = formatAnnotation(publishedBinop);
+        itemHasDiff = true;
+      }
+
+      if (itemHasDiff) {
+        moduleDiff.items[currentBinop.name] = itemDiff;
+        moduleHasDiff = true;
+      }
+    }
+
+    for (const currentAlias of currentMod.aliases) {
+      const publishedAlias = publishedMod.aliases.find((a) => a.name === currentAlias.name);
+      if (!publishedAlias) continue;
+
+      const itemDiff: ItemContentDiff = {};
+      let itemHasDiff = false;
+
+      if (publishedAlias.comment !== currentAlias.comment) {
+        const commentDiff = computeLineDiff(publishedAlias.comment, currentAlias.comment);
+        if (commentDiff) {
+          itemDiff.commentDiff = commentDiff;
+          itemHasDiff = true;
+        }
+      }
+
+      if (publishedAlias.type !== currentAlias.type || JSON.stringify(publishedAlias.args) !== JSON.stringify(currentAlias.args)) {
+        itemDiff.oldAnnotation = formatAliasAnnotation(publishedAlias);
+        itemHasDiff = true;
+      }
+
+      if (itemHasDiff) {
+        moduleDiff.items[currentAlias.name] = itemDiff;
+        moduleHasDiff = true;
+      }
+    }
+
+    for (const currentUnion of currentMod.unions) {
+      const publishedUnion = publishedMod.unions.find((u) => u.name === currentUnion.name);
+      if (!publishedUnion) continue;
+
+      const itemDiff: ItemContentDiff = {};
+      let itemHasDiff = false;
+
+      if (publishedUnion.comment !== currentUnion.comment) {
+        const commentDiff = computeLineDiff(publishedUnion.comment, currentUnion.comment);
+        if (commentDiff) {
+          itemDiff.commentDiff = commentDiff;
+          itemHasDiff = true;
+        }
+      }
+
+      if (JSON.stringify(publishedUnion.cases) !== JSON.stringify(currentUnion.cases) || JSON.stringify(publishedUnion.args) !== JSON.stringify(currentUnion.args)) {
+        itemDiff.oldAnnotation = formatUnionAnnotation(publishedUnion);
+        itemHasDiff = true;
+      }
+
+      if (itemHasDiff) {
+        moduleDiff.items[currentUnion.name] = itemDiff;
+        moduleHasDiff = true;
+      }
+    }
+
+    if (moduleHasDiff) {
+      diff.modules[currentMod.name] = moduleDiff;
+      hasAnyDiff = true;
+    }
+  }
+
+  if (publishedReadme != null && currentReadme != null && publishedReadme !== currentReadme) {
+    const readmeDiff = computeLineDiff(publishedReadme, currentReadme);
+    if (readmeDiff) {
+      diff.readmeDiff = readmeDiff;
+      hasAnyDiff = true;
+    }
+  }
+
+  return hasAnyDiff ? diff : null;
+}
+
 class DocServer {
   options: Options;
   private elm: Elm;
@@ -992,6 +1244,28 @@ class DocServer {
       const [author, project] = this.manifest.name.split("/", 2);
       info("  |>", "running elm diff");
       const diff = buildDiff(this.elm);
+
+      // Compute content diff (doc comments + README)
+      let contentDiff: ContentDiff | null = null;
+      if (this.manifest.name) {
+        const latestVersion = getLatestPublishedVersion(this.elmCache, this.manifest.name);
+        if (latestVersion) {
+          const publishedDocs = loadPublishedDocs(this.elmCache, this.manifest.name, latestVersion);
+          const publishedReadme = loadPublishedReadme(this.elmCache, this.manifest.name, latestVersion);
+          const currentDocs = buildDocs(this.manifest, this.options.dir, this.elm, true);
+          let currentReadme: string | null = null;
+          try {
+            currentReadme = fs.readFileSync(path.join(this.options.dir, "README.md"), "utf-8");
+          } catch {}
+          contentDiff = computeContentDiff(
+            publishedDocs,
+            Array.isArray(currentDocs) ? currentDocs as DocsModule[] : null,
+            publishedReadme,
+            currentReadme
+          );
+        }
+      }
+
       info("  |>", "sending Diff");
       this.broadcast({
         type: "diff",
@@ -1000,6 +1274,7 @@ class DocServer {
           project: project,
           version: this.manifest.version,
           diff: diff,
+          contentDiff: contentDiff,
         },
       });
     }

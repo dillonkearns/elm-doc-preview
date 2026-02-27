@@ -487,3 +487,60 @@ Not really any of those on the website though AFAIK.
   text-decoration: line-through;
   font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
 }
+
+/* Unified diff view (GitHub-style) */
+.diff-view {
+  font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+  padding: 0;
+}
+
+.diff-line {
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.diff-line-added {
+  background-color: #dafbe1;
+}
+
+.diff-line-removed {
+  background-color: #ffebe9;
+}
+
+.diff-line-context {
+  background-color: transparent;
+}
+
+.diff-line-prefix {
+  display: inline-block;
+  width: 16px;
+  user-select: none;
+  color: inherit;
+}
+
+/* Old type annotation (struck through above current) */
+.diff-old-annotation {
+  font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  color: #cf222e;
+  text-decoration: line-through;
+  background-color: #ffebe9;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+/* Doc-only change highlight (distinct from API change yellow) */
+.docs-block.diff-docs-changed {
+  background-color: #ddf4ff;
+  border-left: 4px solid #0969da;
+  padding-left: 12px;
+}
