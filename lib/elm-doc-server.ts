@@ -712,7 +712,7 @@ function compareVersionsLocal(a: string, b: string): number {
   return 0;
 }
 
-function getLatestPublishedVersion(elmCache: string, packageName: string): string | null {
+function getLatestPublishedVersionFromCache(elmCache: string, packageName: string): string | null {
   try {
     const [author, project] = packageName.split("/", 2);
     const pkgDir = path.join(elmCache, author, project);
@@ -727,7 +727,28 @@ function getLatestPublishedVersion(elmCache: string, packageName: string): strin
   }
 }
 
-function loadPublishedDocs(elmCache: string, name: string, version: string): DocsModule[] | null {
+async function getLatestPublishedVersion(elmCache: string, packageName: string): Promise<string | null> {
+  // Try local cache first
+  const cached = getLatestPublishedVersionFromCache(elmCache, packageName);
+  if (cached) return cached;
+
+  // Fall back to fetching from the Elm package registry
+  try {
+    const res = await fetch(
+      `https://package.elm-lang.org/packages/${packageName}/releases.json`,
+      { headers: { "User-Agent": "elm-docs-server" } }
+    );
+    if (!res.ok) return null;
+    const releases = (await res.json()) as Record<string, number>;
+    const versions = Object.keys(releases);
+    if (versions.length === 0) return null;
+    return versions.sort(compareVersionsLocal).pop()!;
+  } catch {
+    return null;
+  }
+}
+
+function loadPublishedDocsFromCache(elmCache: string, name: string, version: string): DocsModule[] | null {
   try {
     const docsPath = path.join(elmCache, name, version, "docs.json");
     if (!fs.existsSync(docsPath)) return null;
@@ -737,7 +758,25 @@ function loadPublishedDocs(elmCache: string, name: string, version: string): Doc
   }
 }
 
-function loadPublishedReadme(elmCache: string, name: string, version: string): string | null {
+async function fetchPublishedDocs(name: string, version: string): Promise<DocsModule[] | null> {
+  try {
+    const res = await fetch(
+      `https://package.elm-lang.org/packages/${name}/${version}/docs.json`,
+      { headers: { "User-Agent": "elm-docs-server" } }
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as DocsModule[];
+  } catch {
+    return null;
+  }
+}
+
+async function loadPublishedDocs(elmCache: string, name: string, version: string): Promise<DocsModule[] | null> {
+  return loadPublishedDocsFromCache(elmCache, name, version)
+    ?? await fetchPublishedDocs(name, version);
+}
+
+function loadPublishedReadmeFromCache(elmCache: string, name: string, version: string): string | null {
   try {
     const readmePath = path.join(elmCache, name, version, "README.md");
     if (!fs.existsSync(readmePath)) return null;
@@ -745,6 +784,24 @@ function loadPublishedReadme(elmCache: string, name: string, version: string): s
   } catch {
     return null;
   }
+}
+
+async function fetchPublishedReadme(name: string, version: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://package.elm-lang.org/packages/${name}/${version}/README.md`,
+      { headers: { "User-Agent": "elm-docs-server" } }
+    );
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+async function loadPublishedReadme(elmCache: string, name: string, version: string): Promise<string | null> {
+  return loadPublishedReadmeFromCache(elmCache, name, version)
+    ?? await fetchPublishedReadme(name, version);
 }
 
 function computeLineDiff(oldText: string, newText: string): DiffLine[] | null {
@@ -1151,6 +1208,7 @@ class DocServer {
     info("  |>", "detected", filepath, "modification");
     if (filepath == "README.md") {
       this.sendReadme();
+      this.sendDiff();
     } else if (filepath.endsWith(".json")) {
       this.manifest = getManifestSync("elm.json");
       this.sendManifest();
@@ -1234,7 +1292,7 @@ class DocServer {
     }
   }
 
-  private sendDiff() {
+  private async sendDiff() {
     if (
       this.manifest &&
       this.manifest.type === "package" &&
@@ -1248,10 +1306,13 @@ class DocServer {
       // Compute content diff (doc comments + README)
       let contentDiff: ContentDiff | null = null;
       if (this.manifest.name) {
-        const latestVersion = getLatestPublishedVersion(this.elmCache, this.manifest.name);
+        const latestVersion = await getLatestPublishedVersion(this.elmCache, this.manifest.name);
         if (latestVersion) {
-          const publishedDocs = loadPublishedDocs(this.elmCache, this.manifest.name, latestVersion);
-          const publishedReadme = loadPublishedReadme(this.elmCache, this.manifest.name, latestVersion);
+          info("  |>", "computing content diff against", this.manifest.name, latestVersion);
+          const [publishedDocs, publishedReadme] = await Promise.all([
+            loadPublishedDocs(this.elmCache, this.manifest.name, latestVersion),
+            loadPublishedReadme(this.elmCache, this.manifest.name, latestVersion),
+          ]);
           const currentDocs = buildDocs(this.manifest, this.options.dir, this.elm, true);
           let currentReadme: string | null = null;
           try {
@@ -1263,6 +1324,9 @@ class DocServer {
             publishedReadme,
             currentReadme
           );
+          info("  |>", "content diff:", contentDiff ? "found changes" : "no changes");
+        } else {
+          info("  |>", "no published version found for content diff");
         }
       }
 
