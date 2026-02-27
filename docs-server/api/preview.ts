@@ -9,15 +9,24 @@ const TMP_DIR = os.tmpdir();
 const ELM_HOME = path.join(TMP_DIR, ".elm-home");
 
 function elmBinPath(): string {
-  // The elm npm package puts the binary here
-  const local = path.join(process.cwd(), "node_modules", "elm", "bin", "elm");
-  if (fs.existsSync(local)) return local;
+  const candidates = [
+    // Relative to function file (Vercel bundles includeFiles here)
+    path.join(__dirname, "..", "node_modules", "elm", "bin", "elm"),
+    // Relative to cwd
+    path.join(process.cwd(), "node_modules", "elm", "bin", "elm"),
+  ];
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
 
   // Fallback: check if elm is on PATH
   const which = spawnSync("which", ["elm"]);
   if (which.status === 0) return which.stdout.toString().trim();
 
-  throw new Error("Elm binary not found");
+  throw new Error(
+    `Elm binary not found. Searched: ${candidates.join(", ")}; cwd=${process.cwd()}, __dirname=${__dirname}`
+  );
 }
 
 async function resolveRef(
