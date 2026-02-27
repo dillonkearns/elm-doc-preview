@@ -516,7 +516,7 @@ viewContent model =
                     lazy viewReadme model.readme
 
         Module name tag ->
-            viewModule model.author model.project model.version name model.docs model.diffData model.diffMode
+            viewModule model.author model.project model.version model.ref name model.docs model.diffData model.diffMode
 
 
 
@@ -543,8 +543,8 @@ viewReadme status =
 -- VIEW MODULE
 
 
-viewModule : String -> String -> Maybe Version -> String -> Status Docs -> Maybe ApiDiff -> Bool -> Html msg
-viewModule author project version name status diffData diffMode =
+viewModule : String -> String -> Maybe Version -> Maybe String -> String -> Status Docs -> Maybe ApiDiff -> Bool -> Html msg
+viewModule author project version ref name status diffData diffMode =
     case status of
         Success (Modules allDocs) ->
             case findModule name allDocs of
@@ -554,7 +554,7 @@ viewModule author project version name status diffData diffMode =
                             h1 [ class "block-list-title" ] [ text name ]
 
                         info =
-                            Block.makeInfo author project version name allDocs diffData diffMode
+                            Block.makeInfo author project version ref name allDocs diffData diffMode
 
                         blocks =
                             List.map (Block.view info) (Docs.toBlocks docs)

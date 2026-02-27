@@ -12,3 +12,4 @@ lib/version.js
 *~
 *.tgz
 npm-debug.log
+.vercel

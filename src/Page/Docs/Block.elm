@@ -198,6 +198,7 @@ type alias Info =
     { author : String
     , project : String
     , version : Maybe V.Version
+    , ref : Maybe String
     , moduleName : String
     , typeNameDict : TypeNameDict
     , diffStatus : String -> DiffStatus
@@ -209,8 +210,8 @@ type alias TypeNameDict =
 
 
 {-| -}
-makeInfo : String -> String -> Maybe V.Version -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Info
-makeInfo author project version moduleName docsList maybeDiff diffMode =
+makeInfo : String -> String -> Maybe V.Version -> Maybe String -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Info
+makeInfo author project version ref moduleName docsList maybeDiff diffMode =
     let
         addUnion home union docs =
             Dict.insert (home ++ "." ++ union.name) ( home, union.name ) docs
@@ -226,7 +227,7 @@ makeInfo author project version moduleName docsList maybeDiff diffMode =
                 _ ->
                     \_ -> Unchanged
     in
-    Info author project version moduleName
+    Info author project version ref moduleName
         (List.foldl addModule Dict.empty docsList)
         statusFn
 
@@ -246,10 +247,15 @@ bold =
 
 
 makeLink : Info -> List (Attribute msg) -> String -> String -> Html msg
-makeLink { author, project, version, moduleName } attrs tagName humanName =
+makeLink { author, project, version, ref, moduleName } attrs tagName humanName =
     let
         url =
-            Href.toModule author project version moduleName (Just tagName)
+            case ref of
+                Just r ->
+                    Href.toRepoModule author project r moduleName (Just tagName)
+
+                Nothing ->
+                    Href.toModule author project version moduleName (Just tagName)
     in
     a (href url :: attrs) [ text humanName ]
 

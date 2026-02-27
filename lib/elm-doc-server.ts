@@ -598,14 +598,18 @@ function parseDiffOutput(output: string): ApiDiff | null {
 
     if (line.match(/^-+ ADDED MODULES/)) {
       i++;
-      while (i < lines.length && lines[i].match(/^\s+\S/)) {
-        diff.addedModules.push(lines[i].trim());
+      while (i < lines.length && !lines[i].match(/^-{4,}/)) {
+        if (lines[i].match(/^\s+\S/)) {
+          diff.addedModules.push(lines[i].trim());
+        }
         i++;
       }
     } else if (line.match(/^-+ REMOVED MODULES/)) {
       i++;
-      while (i < lines.length && lines[i].match(/^\s+\S/)) {
-        diff.removedModules.push(lines[i].trim());
+      while (i < lines.length && !lines[i].match(/^-{4,}/)) {
+        if (lines[i].match(/^\s+\S/)) {
+          diff.removedModules.push(lines[i].trim());
+        }
         i++;
       }
     } else if (line.match(/^-{4,} .+ - (MAJOR|MINOR|PATCH) -{4,}$/)) {
