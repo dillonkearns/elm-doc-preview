@@ -23,6 +23,21 @@ any surprise when releasing a package.
 $ npm install -g elm-doc-preview
 ```
 
+## Local development install
+
+From the project root, install the current checked-in build globally:
+
+```sh
+$ npm i -g .
+```
+
+If you changed Elm/TypeScript source files and want those changes reflected in
+the global install, rebuild first:
+
+```sh
+$ npm run install:global
+```
+
 `npm` may warn about missing peer dependencies:
 ```
 npm WARN ws@7.2.3 requires a peer of bufferutil@^4.0.1 but none is installed. You must install peer dependencies yourself.

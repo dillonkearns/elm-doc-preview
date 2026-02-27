@@ -63,7 +63,9 @@
     "url": "git+https://github.com/dmy/elm-doc-preview.git"
   },
   "scripts": {
-    "prepare": "make",
+    "build": "make",
+    "install:global": "npm run build && npm i -g .",
+    "prepublishOnly": "make",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "type": "module",
