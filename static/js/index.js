@@ -23,28 +23,30 @@ document.addEventListener("click", function (e) {
   }
 });
 
-var ws = new WebSocket("ws://" + location.hostname + ":" + location.port + "/");
+if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+  var ws = new WebSocket("ws://" + location.hostname + ":" + location.port + "/");
 
-ws.onclose = function (event) {
-  if (event.code > 1001) {
-    location.reload();
-  }
-};
+  ws.onclose = function (event) {
+    if (event.code > 1001) {
+      location.reload();
+    }
+  };
 
-ws.onmessage = function (event) {
-  var msg = JSON.parse(event.data);
-  switch (msg.type) {
-    case "readme":
-      app.ports.onReadme.send(msg.data);
-      break;
-    case "manifest":
-      app.ports.onManifest.send(msg.data);
-      break;
-    case "docs":
-      app.ports.onDocs.send(msg.data);
-      break;
-    case "diff":
-      app.ports.onDiff.send(msg.data);
-      break;
-  }
-};
+  ws.onmessage = function (event) {
+    var msg = JSON.parse(event.data);
+    switch (msg.type) {
+      case "readme":
+        app.ports.onReadme.send(msg.data);
+        break;
+      case "manifest":
+        app.ports.onManifest.send(msg.data);
+        break;
+      case "docs":
+        app.ports.onDocs.send(msg.data);
+        break;
+      case "diff":
+        app.ports.onDiff.send(msg.data);
+        break;
+    }
+  };
+}

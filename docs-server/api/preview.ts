@@ -202,6 +202,56 @@ function parseDiffOutput(output: string): ApiDiff | null {
   return diff;
 }
 
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] < pb[i]) return -1;
+    if (pa[i] > pb[i]) return 1;
+  }
+  return 0;
+}
+
+async function shouldRunDiff(workDir: string): Promise<boolean> {
+  try {
+    const elmJson = JSON.parse(
+      fs.readFileSync(path.join(workDir, "elm.json"), "utf-8")
+    );
+
+    // Applications don't have published versions — elm diff will fail on its own
+    if (elmJson.type !== "package") return true;
+
+    const name: string = elmJson.name;
+    const version: string = elmJson.version;
+
+    // Fetch published releases from the Elm package registry
+    const res = await fetch(
+      `https://package.elm-lang.org/packages/${name}/releases.json`,
+      { headers: { "User-Agent": "elm-docs-server" } }
+    );
+
+    if (!res.ok) {
+      // Package never published — diff is meaningful
+      return true;
+    }
+
+    const releases = (await res.json()) as Record<string, number>;
+    const publishedVersions = Object.keys(releases);
+
+    if (publishedVersions.length === 0) return true;
+
+    const latest = publishedVersions.sort(compareVersions).pop()!;
+
+    // If elm.json version is behind the latest published version,
+    // this is a historical commit — the diff would compare against a
+    // newer release and produce confusing "reverse" results.
+    return compareVersions(version, latest) >= 0;
+  } catch {
+    // If anything fails, let elm diff run and handle errors itself
+    return true;
+  }
+}
+
 function buildDiff(workDir: string): ApiDiff | null {
   try {
     const elm = elmBinPath();
@@ -261,8 +311,12 @@ export default async function handler(
     console.log(`Docs built successfully`);
 
     // Step 4: Build diff (best-effort, null on failure)
-    const diff = buildDiff(workDir);
-    console.log(`Diff: ${diff ? diff.magnitude : "not available"}`);
+    // Skip diff for historical commits where a newer version is already published,
+    // since elm diff compares against the latest published version and would
+    // produce confusing reverse results.
+    const runDiff = await shouldRunDiff(workDir);
+    const diff = runDiff ? buildDiff(workDir) : null;
+    console.log(`Diff: ${runDiff ? (diff ? diff.magnitude : "no changes") : "skipped (historical commit)"}`);
 
     // If the ref is a full commit SHA, cache forever (immutable).
     // Otherwise (branch/tag), use a short TTL so new pushes are picked up.
