@@ -1,5 +1,5 @@
 module Session exposing
-    ( Data, Docs(..), Preview, empty
+    ( Data, Docs(..), Preview, RepoDocsResponse, empty
     , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
     , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
     , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
@@ -9,7 +9,7 @@ module Session exposing
 
 {-|
 
-@docs Data, Docs, Preview, empty
+@docs Data, Docs, Preview, RepoDocsResponse, empty
 @docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
 @docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
 @docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
@@ -59,6 +59,13 @@ type Docs
 type alias Preview =
     { name : String
     , version : String
+    }
+
+
+{-| -}
+type alias RepoDocsResponse =
+    { docs : Docs
+    , diff : Maybe ApiDiff
     }
 
 
@@ -282,22 +289,29 @@ getRepoDocs data owner repo ref =
 
 
 {-| -}
-addRepoDocs : String -> String -> String -> Docs -> Data -> Data
-addRepoDocs owner repo ref docs data =
+addRepoDocs : String -> String -> String -> RepoDocsResponse -> Data -> Data
+addRepoDocs owner repo ref response data =
     let
         newDocs =
-            Dict.insert (toRefKey owner repo ref) docs data.docs
+            Dict.insert (toRefKey owner repo ref) response.docs data.docs
     in
-    { data | docs = newDocs }
+    { data | docs = newDocs, diff = response.diff }
 
 
 {-| -}
-fetchRepoDocs : (Result Http.Error Docs -> msg) -> String -> String -> String -> Cmd msg
+fetchRepoDocs : (Result Http.Error RepoDocsResponse -> msg) -> String -> String -> String -> Cmd msg
 fetchRepoDocs toMsg owner repo ref =
     Http.get
-        { url = Url.absolute [ "repos", owner, repo, ref, "docs.json" ] []
-        , expect = Http.expectJson toMsg docsDecoder
+        { url = Url.absolute [ "repos", owner, repo, ref, "preview.json" ] []
+        , expect = Http.expectJson toMsg repoDocsResponseDecoder
         }
+
+
+repoDocsResponseDecoder : Decoder RepoDocsResponse
+repoDocsResponseDecoder =
+    Decode.map2 RepoDocsResponse
+        (Decode.field "docs" docsDecoder)
+        (Decode.field "diff" ApiDiff.decoder)
 
 
 

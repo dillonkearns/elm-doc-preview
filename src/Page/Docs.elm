@@ -106,9 +106,13 @@ init session author project version focus =
 {-| -}
 initRepo : Session.Data -> String -> String -> String -> Focus -> ( Model, Cmd Msg )
 initRepo session owner repo ref focus =
+    let
+        restoredDiff =
+            Session.getDiff session
+    in
     case Session.getRepoDocs session owner repo ref of
         Just docs ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading Nothing False
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff (restoredDiff /= Nothing)
             , scrollIfNeeded focus
             )
 
@@ -188,7 +192,7 @@ type Msg
     | GotReadme Version (Result Http.Error String)
     | GotDocs Version (Result Http.Error Docs)
     | GotManifest Version (Result Http.Error Project)
-    | GotRepoDocs (Result Http.Error Docs)
+    | GotRepoDocs (Result Http.Error Session.RepoDocsResponse)
 
 
 {-| -}
@@ -285,10 +289,12 @@ update msg model =
 
         GotRepoDocs result ->
             case ( result, model.ref ) of
-                ( Ok docs, Just ref ) ->
+                ( Ok response, Just ref ) ->
                     ( { model
-                        | docs = Success docs
-                        , session = Session.addRepoDocs model.author model.project ref docs model.session
+                        | docs = Success response.docs
+                        , diffData = response.diff
+                        , diffMode = response.diff /= Nothing
+                        , session = Session.addRepoDocs model.author model.project ref response model.session
                       }
                     , scrollIfNeeded model.focus
                     )
