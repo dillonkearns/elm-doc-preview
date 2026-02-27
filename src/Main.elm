@@ -399,7 +399,16 @@ stepUrl url model =
                     )
                 , route (s "repos" </> author_ </> project_ </> ref_ </> focus_)
                     (\owner repo ref focus ->
-                        stepDocs model (Docs.initRepo session owner repo ref focus)
+                        let
+                            currentDiffMode =
+                                case model.page of
+                                    Docs docsModel ->
+                                        Just docsModel.diffMode
+
+                                    _ ->
+                                        Nothing
+                        in
+                        stepDocs model (Docs.initRepo session currentDiffMode owner repo ref focus)
                     )
                 ]
     in

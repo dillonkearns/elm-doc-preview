@@ -105,15 +105,23 @@ init session author project version focus =
 
 
 {-| -}
-initRepo : Session.Data -> String -> String -> String -> Focus -> ( Model, Cmd Msg )
-initRepo session owner repo ref focus =
+initRepo : Session.Data -> Maybe Bool -> String -> String -> String -> Focus -> ( Model, Cmd Msg )
+initRepo session maybeDiffMode owner repo ref focus =
     let
         restoredDiff =
             Session.getDiff session
+
+        diffMode =
+            case maybeDiffMode of
+                Just dm ->
+                    dm
+
+                Nothing ->
+                    restoredDiff /= Nothing
     in
     case Session.getRepoDocs session owner repo ref of
         Just docs ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff (restoredDiff /= Nothing) Nothing
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff diffMode Nothing
             , scrollIfNeeded focus
             )
 
