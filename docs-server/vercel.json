@@ -1,0 +1,24 @@
+{
+  "rewrites": [
+    {
+      "source": "/:owner/:repo/:ref/docs.json",
+      "destination": "/api/docs?owner=:owner&repo=:repo&ref=:ref"
+    }
+  ],
+  "functions": {
+    "api/docs.ts": {
+      "includeFiles": "node_modules/elm/**",
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)/docs.json",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" }
+      ]
+    }
+  ]
+}

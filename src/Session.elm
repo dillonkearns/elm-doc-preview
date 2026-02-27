@@ -1,8 +1,9 @@
 module Session exposing
     ( Data, Docs(..), Preview, empty
     , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
-    , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview
-    , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff
+    , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
+    , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
+    , addRepoDocs
     , docsDecoder
     )
 
@@ -10,8 +11,9 @@ module Session exposing
 
 @docs Data, Docs, Preview, empty
 @docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
-@docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview
-@docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff
+@docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
+@docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
+@docs addRepoDocs
 @docs docsDecoder
 
 -}
@@ -260,6 +262,41 @@ fetchManifest toMsg author project version =
     Http.get
         { url = Url.absolute [ "packages", author, project, V.toString version, "elm.json" ] []
         , expect = Http.expectJson toMsg Project.decoder
+        }
+
+
+
+-- REPO DOCS
+
+
+{-| -}
+toRefKey : String -> String -> String -> String
+toRefKey owner repo ref =
+    "repo:" ++ owner ++ "/" ++ repo ++ "@" ++ ref
+
+
+{-| -}
+getRepoDocs : Data -> String -> String -> String -> Maybe Docs
+getRepoDocs data owner repo ref =
+    Dict.get (toRefKey owner repo ref) data.docs
+
+
+{-| -}
+addRepoDocs : String -> String -> String -> Docs -> Data -> Data
+addRepoDocs owner repo ref docs data =
+    let
+        newDocs =
+            Dict.insert (toRefKey owner repo ref) docs data.docs
+    in
+    { data | docs = newDocs }
+
+
+{-| -}
+fetchRepoDocs : (Result Http.Error Docs -> msg) -> String -> String -> String -> Cmd msg
+fetchRepoDocs toMsg owner repo ref =
+    Http.get
+        { url = Url.absolute [ "repos", owner, repo, ref, "docs.json" ] []
+        , expect = Http.expectJson toMsg docsDecoder
         }
 
 

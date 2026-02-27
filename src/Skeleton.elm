@@ -1,5 +1,5 @@
 module Skeleton exposing
-    ( Details, Segment, Warning(..)
+    ( Details, Segment(..), Warning(..)
     , authorSegment, moduleSegment, projectSegment, versionSegment
     , view
     )

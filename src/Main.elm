@@ -397,6 +397,10 @@ stepUrl url model =
                     (\author project version focus ->
                         stepDocs model (Docs.init session author project version focus)
                     )
+                , route (s "repos" </> author_ </> project_ </> ref_ </> focus_)
+                    (\owner repo ref focus ->
+                        stepDocs model (Docs.initRepo session owner repo ref focus)
+                    )
                 ]
     in
     case Parser.parse parser url of
@@ -433,6 +437,11 @@ version_ =
 
             else
                 Maybe.map Just (Version.fromString string)
+
+
+ref_ : Parser (String -> a) a
+ref_ =
+    custom "REF" Just
 
 
 focus_ : Parser (Docs.Focus -> a) a

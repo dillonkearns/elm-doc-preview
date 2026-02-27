@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "elm": "0.19.1-6",
+    "tar": "^6.2.1"
+  },
+  "devDependencies": {
+    "@types/tar": "^6.1.13",
+    "@vercel/node": "^3.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,6 +1,6 @@
 module Page.Docs exposing
     ( Focus(..), Model, Msg
-    , init, update, view
+    , init, initRepo, update, view
     , toTitle
     , updateReadme, updateDocs, updateManifest, updateDiff
     )
@@ -8,7 +8,7 @@ module Page.Docs exposing
 {-|
 
 @docs Focus, Model, Msg
-@docs init, update, view
+@docs init, initRepo, update, view
 @docs toTitle
 @docs updateReadme, updateDocs, updateManifest, updateDiff
 
@@ -53,6 +53,7 @@ type alias Model =
     , author : String
     , project : String
     , version : Maybe Version
+    , ref : Maybe String
     , focus : Focus
     , query : String
     , latest : Status Version
@@ -94,11 +95,26 @@ init session author project version focus =
                     Release.getLatest releases
             in
             getInfo latest <|
-                Model session author project version focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
+                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
 
         Nothing ->
-            ( Model session author project version focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
+            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
             , Session.fetchReleases GotReleases author project
+            )
+
+
+{-| -}
+initRepo : Session.Data -> String -> String -> String -> Focus -> ( Model, Cmd Msg )
+initRepo session owner repo ref focus =
+    case Session.getRepoDocs session owner repo ref of
+        Just docs ->
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading Nothing False
+            , scrollIfNeeded focus
+            )
+
+        Nothing ->
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False
+            , Session.fetchRepoDocs GotRepoDocs owner repo ref
             )
 
 
@@ -172,6 +188,7 @@ type Msg
     | GotReadme Version (Result Http.Error String)
     | GotDocs Version (Result Http.Error Docs)
     | GotManifest Version (Result Http.Error Project)
+    | GotRepoDocs (Result Http.Error Docs)
 
 
 {-| -}
@@ -266,6 +283,24 @@ update msg model =
                     , Cmd.none
                     )
 
+        GotRepoDocs result ->
+            case ( result, model.ref ) of
+                ( Ok docs, Just ref ) ->
+                    ( { model
+                        | docs = Success docs
+                        , session = Session.addRepoDocs model.author model.project ref docs model.session
+                      }
+                    , scrollIfNeeded model.focus
+                    )
+
+                ( Err _, _ ) ->
+                    ( { model | docs = Failure }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- EXTERNAL UPDATES
@@ -358,12 +393,17 @@ toTitle model =
 
 toGenericTitle : Model -> String
 toGenericTitle model =
-    case getVersion model of
-        Just version ->
-            model.project ++ " " ++ Version.toString version
+    case model.ref of
+        Just ref ->
+            model.author ++ "/" ++ model.project ++ " (" ++ ref ++ ")"
 
         Nothing ->
-            model.project
+            case getVersion model of
+                Just version ->
+                    model.project ++ " " ++ Version.toString version
+
+                Nothing ->
+                    model.project
 
 
 getVersion : Model -> Maybe Version
@@ -390,10 +430,18 @@ getVersion model =
 
 toHeader : Model -> List Skeleton.Segment
 toHeader model =
-    [ Skeleton.authorSegment model.author
-    , Skeleton.projectSegment model.author model.project
-    , Skeleton.versionSegment model.author model.project (getVersion model)
-    ]
+    case model.ref of
+        Just ref ->
+            [ Skeleton.Text model.author
+            , Skeleton.Link (Href.toRepoVersion model.author model.project ref Nothing) model.project
+            , Skeleton.Text ref
+            ]
+
+        Nothing ->
+            [ Skeleton.authorSegment model.author
+            , Skeleton.projectSegment model.author model.project
+            , Skeleton.versionSegment model.author model.project (getVersion model)
+            ]
 
 
 
@@ -402,24 +450,29 @@ toHeader model =
 
 toWarning : Model -> Skeleton.Warning
 toWarning model =
-    case model.version of
-        Nothing ->
+    case model.ref of
+        Just _ ->
             Skeleton.NoProblems
 
-        Just version ->
-            case model.latest of
-                Success latest ->
-                    if version == latest then
-                        Skeleton.NoProblems
-
-                    else
-                        Skeleton.NewerVersion (toNewerUrl model) latest
-
-                Loading ->
+        Nothing ->
+            case model.version of
+                Nothing ->
                     Skeleton.NoProblems
 
-                Failure ->
-                    Skeleton.NoProblems
+                Just version ->
+                    case model.latest of
+                        Success latest ->
+                            if version == latest then
+                                Skeleton.NoProblems
+
+                            else
+                                Skeleton.NewerVersion (toNewerUrl model) latest
+
+                        Loading ->
+                            Skeleton.NoProblems
+
+                        Failure ->
+                            Skeleton.NoProblems
 
 
 toNewerUrl : Model -> String
@@ -553,9 +606,15 @@ viewSidebar model =
 
 viewNormalSidebar : Model -> List (Html Msg)
 viewNormalSidebar model =
-    [ lazy4 viewReadmeLink model.author model.project model.version model.focus
+    [ viewReadmeLink model.author model.project model.version model.ref model.focus
     , br [] []
-    , lazy4 viewBrowseSourceLink model.author model.project model.version model.latest
+    , case model.ref of
+        Just ref ->
+            a [ class "pkg-nav-module", href ("https://github.com/" ++ model.author ++ "/" ++ model.project ++ "/tree/" ++ ref) ]
+                [ text "Source" ]
+
+        Nothing ->
+            lazy4 viewBrowseSourceLink model.author model.project model.version model.latest
     , h2 [ style "margin-bottom" "0" ] [ text "Modules" ]
     , input
         [ placeholder "Search"
@@ -674,13 +733,22 @@ viewDiffItemList model moduleName cssClass prefix items =
         []
 
     else
+        let
+            toModuleHref itemName =
+                case model.ref of
+                    Just ref ->
+                        Href.toRepoModule model.author model.project ref moduleName (Just itemName)
+
+                    Nothing ->
+                        Href.toModule model.author model.project model.version moduleName (Just itemName)
+        in
         [ ul []
             (List.map
                 (\name ->
                     li [ class cssClass ]
                         [ span [ class "diff-prefix" ] [ text prefix ]
                         , a
-                            [ href (Href.toModule model.author model.project model.version moduleName (Just name))
+                            [ href (toModuleHref name)
                             , class "pkg-nav-module"
                             ]
                             [ text name ]
@@ -799,9 +867,18 @@ isTagMatch query toResult tipeName ( tagName, _ ) =
 -- VIEW "README" LINK
 
 
-viewReadmeLink : String -> String -> Maybe Version -> Focus -> Html msg
-viewReadmeLink author project version focus =
-    navLink "README" (Href.toVersion author project version Nothing) <|
+viewReadmeLink : String -> String -> Maybe Version -> Maybe String -> Focus -> Html msg
+viewReadmeLink author project version ref focus =
+    let
+        url =
+            case ref of
+                Just r ->
+                    Href.toRepoVersion author project r Nothing
+
+                Nothing ->
+                    Href.toVersion author project version Nothing
+    in
+    navLink "README" url <|
         case focus of
             Readme _ ->
                 True
@@ -851,7 +928,12 @@ viewModuleLink : Model -> String -> Html msg
 viewModuleLink model name =
     let
         url =
-            Href.toModule model.author model.project model.version name Nothing
+            case model.ref of
+                Just ref ->
+                    Href.toRepoModule model.author model.project ref name Nothing
+
+                Nothing ->
+                    Href.toModule model.author model.project model.version name Nothing
     in
     navLink name url <|
         case model.focus of
@@ -863,10 +945,15 @@ viewModuleLink model name =
 
 
 viewValueItem : Model -> String -> String -> String -> Html msg
-viewValueItem { author, project, version } moduleName ownerName valueName =
+viewValueItem model moduleName ownerName valueName =
     let
         url =
-            Href.toModule author project version moduleName (Just ownerName)
+            case model.ref of
+                Just ref ->
+                    Href.toRepoModule model.author model.project ref moduleName (Just ownerName)
+
+                Nothing ->
+                    Href.toModule model.author model.project model.version moduleName (Just ownerName)
     in
     li [ class "pkg-nav-value" ] [ navLink valueName url False ]
 

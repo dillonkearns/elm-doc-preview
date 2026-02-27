@@ -1,8 +1,8 @@
-module Href exposing (toModule, toProject, toVersion)
+module Href exposing (toModule, toProject, toVersion, toRepoVersion, toRepoModule)
 
 {-|
 
-@docs toModule, toProject, toVersion
+@docs toModule, toProject, toVersion, toRepoVersion, toRepoModule
 
 -}
 
@@ -30,6 +30,18 @@ toVersion author project version fragment =
 toModule : String -> String -> Maybe V.Version -> String -> Maybe String -> String
 toModule author project version moduleName fragment =
     Url.custom Url.Absolute [ "packages", author, project, vsnToString version, String.replace "." "-" moduleName ] [] fragment
+
+
+{-| -}
+toRepoVersion : String -> String -> String -> Maybe String -> String
+toRepoVersion owner repo ref fragment =
+    Url.custom Url.Absolute [ "repos", owner, repo, ref, "" ] [] fragment
+
+
+{-| -}
+toRepoModule : String -> String -> String -> String -> Maybe String -> String
+toRepoModule owner repo ref moduleName fragment =
+    Url.custom Url.Absolute [ "repos", owner, repo, ref, String.replace "." "-" moduleName ] [] fragment
 
 
 

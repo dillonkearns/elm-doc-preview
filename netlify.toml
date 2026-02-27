@@ -1,0 +1,42 @@
+[build]
+  publish = "static"
+  command = "npm install && make"
+
+# API: proxy repo docs to Vercel serverless function
+[[redirects]]
+  from = "/repos/:owner/:repo/:ref/docs.json"
+  to = "https://elm-docs.vercel.app/:owner/:repo/:ref/docs.json"
+  status = 200
+  force = true
+
+# API: proxy package data to Elm registry
+[[redirects]]
+  from = "/packages/:author/:project/releases.json"
+  to = "https://package.elm-lang.org/packages/:author/:project/releases.json"
+  status = 200
+
+[[redirects]]
+  from = "/packages/:author/:project/:version/docs.json"
+  to = "https://package.elm-lang.org/packages/:author/:project/:version/docs.json"
+  status = 200
+
+[[redirects]]
+  from = "/packages/:author/:project/:version/README.md"
+  to = "https://package.elm-lang.org/packages/:author/:project/:version/README.md"
+  status = 200
+
+[[redirects]]
+  from = "/packages/:author/:project/:version/elm.json"
+  to = "https://package.elm-lang.org/packages/:author/:project/:version/elm.json"
+  status = 200
+
+[[redirects]]
+  from = "/search.json"
+  to = "https://package.elm-lang.org/search.json"
+  status = 200
+
+# SPA: all other routes fall through to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
