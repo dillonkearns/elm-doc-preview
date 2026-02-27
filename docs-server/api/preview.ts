@@ -333,7 +333,13 @@ export default async function handler(
     const docs = buildDocs(workDir);
     console.log(`Docs built successfully`);
 
-    // Step 4: Build diff (best-effort, null on failure) + PR lookup
+    // Step 4: Read README.md from the repo (best-effort)
+    const readmePath = path.join(workDir, "README.md");
+    const readme = fs.existsSync(readmePath)
+      ? fs.readFileSync(readmePath, "utf-8")
+      : null;
+
+    // Step 5: Build diff (best-effort, null on failure) + PR lookup
     // Skip diff for historical commits where a newer version is already published,
     // since elm diff compares against the latest published version and would
     // produce confusing reverse results.
@@ -354,7 +360,7 @@ export default async function handler(
       res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
     }
 
-    return res.status(200).json({ docs, diff, pullRequestUrl });
+    return res.status(200).json({ docs, diff, pullRequestUrl, readme });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`Error: ${message}`);

@@ -293,6 +293,13 @@ update msg model =
                 ( Ok response, Just ref ) ->
                     ( { model
                         | docs = Success response.docs
+                        , readme =
+                            case response.readme of
+                                Just rm ->
+                                    Success rm
+
+                                Nothing ->
+                                    Failure
                         , diffData = response.diff
                         , diffMode = response.diff /= Nothing
                         , pullRequestUrl = response.pullRequestUrl
@@ -302,7 +309,7 @@ update msg model =
                     )
 
                 ( Err _, _ ) ->
-                    ( { model | docs = Failure }
+                    ( { model | docs = Failure, readme = Failure }
                     , Cmd.none
                     )
 
