@@ -559,6 +559,120 @@ function versionToConstraint(version: string): string {
   return `${major}.${minor}.${patch} <= v < ${major}.${minor}.${nextPatch}`;
 }
 
+interface ApiDiff {
+  magnitude: string;
+  addedModules: string[];
+  removedModules: string[];
+  changedModules: ApiModuleChanges[];
+}
+
+interface ApiModuleChanges {
+  name: string;
+  added: string[];
+  changed: string[];
+  removed: string[];
+}
+
+function parseDiffOutput(output: string): ApiDiff | null {
+  const lines = output.split("\n");
+  if (lines.length === 0) {
+    return null;
+  }
+
+  // First line: "This is a MAJOR/MINOR/PATCH change."
+  const magnitudeMatch = lines[0].match(/This is a (MAJOR|MINOR|PATCH) change/);
+  if (!magnitudeMatch) {
+    return null;
+  }
+
+  const diff: ApiDiff = {
+    magnitude: magnitudeMatch[1],
+    addedModules: [],
+    removedModules: [],
+    changedModules: [],
+  };
+
+  let i = 1;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.match(/^-+ ADDED MODULES/)) {
+      i++;
+      while (i < lines.length && lines[i].match(/^\s+\S/)) {
+        diff.addedModules.push(lines[i].trim());
+        i++;
+      }
+    } else if (line.match(/^-+ REMOVED MODULES/)) {
+      i++;
+      while (i < lines.length && lines[i].match(/^\s+\S/)) {
+        diff.removedModules.push(lines[i].trim());
+        i++;
+      }
+    } else if (line.match(/^-{4,} .+ - (MAJOR|MINOR|PATCH) -{4,}$/)) {
+      const moduleMatch = line.match(/^-{4,} (.+?) - (?:MAJOR|MINOR|PATCH) -{4,}$/);
+      if (moduleMatch) {
+        const mc: ApiModuleChanges = {
+          name: moduleMatch[1],
+          added: [],
+          changed: [],
+          removed: [],
+        };
+        i++;
+        let section: "added" | "changed" | "removed" | null = null;
+        while (i < lines.length && !lines[i].match(/^-{4,}/)) {
+          const sectionLine = lines[i].trim();
+          if (sectionLine === "Added:") {
+            section = "added";
+          } else if (sectionLine === "Changed:") {
+            section = "changed";
+          } else if (sectionLine === "Removed:") {
+            section = "removed";
+          } else if (section && sectionLine.length > 0) {
+            // Extract item name from definition lines like "newFunc : String -> Int"
+            // or "- oldFunc : Int -> String" / "+ oldFunc : Int -> Int -> String"
+            // Skip continuation lines (indented type signatures, standalone symbols)
+            const cleanLine = sectionLine.replace(/^[+-]\s*/, "");
+            const nameMatch = cleanLine.match(/^([a-zA-Z][a-zA-Z0-9_]*)\s+:/);
+            if (nameMatch) {
+              const itemName = nameMatch[1];
+              // For changed section, each item appears twice (- and +), only add once
+              if (section === "changed") {
+                if (!mc.changed.includes(itemName)) {
+                  mc.changed.push(itemName);
+                }
+              } else {
+                if (!mc[section].includes(itemName)) {
+                  mc[section].push(itemName);
+                }
+              }
+            }
+          }
+          i++;
+        }
+        diff.changedModules.push(mc);
+      } else {
+        i++;
+      }
+    } else {
+      i++;
+    }
+  }
+
+  return diff;
+}
+
+function buildDiff(elm: Elm): ApiDiff | null {
+  try {
+    const result = elm(["diff"]);
+    if (result.error || result.status !== 0) {
+      return null;
+    }
+    return parseDiffOutput(result.stdout.toString());
+  } catch (err) {
+    return null;
+  }
+}
+
 class DocServer {
   options: Options;
   private elm: Elm;
@@ -638,6 +752,7 @@ class DocServer {
     // websockets
     this.app.ws("/", (socket, req) => {
       info(`  |> ${req.socket.remoteAddress} connected`);
+      this.sendDiff();
       socket.on("close", () => {
         info("  |> client disconnected");
       });
@@ -788,8 +903,10 @@ class DocServer {
       this.manifest = getManifestSync("elm.json");
       this.sendManifest();
       this.sendDocs();
+      this.sendDiff();
     } else {
       this.sendDocs();
+      this.sendDiff();
     }
   }
 
@@ -860,6 +977,29 @@ class DocServer {
           version: this.manifest.version,
           time: this.manifest.timestamp,
           docs: docs,
+        },
+      });
+    }
+  }
+
+  private sendDiff() {
+    if (
+      this.manifest &&
+      this.manifest.type === "package" &&
+      this.manifest.name &&
+      this.manifest.name.includes("/")
+    ) {
+      const [author, project] = this.manifest.name.split("/", 2);
+      info("  |>", "running elm diff");
+      const diff = buildDiff(this.elm);
+      info("  |>", "sending Diff");
+      this.broadcast({
+        type: "diff",
+        data: {
+          author: author,
+          project: project,
+          version: this.manifest.version,
+          diff: diff,
         },
       });
     }

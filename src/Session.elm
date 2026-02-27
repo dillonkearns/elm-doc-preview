@@ -1,21 +1,22 @@
 module Session exposing
     ( Data, Docs(..), Preview, empty
-    , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview
+    , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
     , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview
-    , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview
+    , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff
     , docsDecoder
     )
 
 {-|
 
 @docs Data, Docs, Preview, empty
-@docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview
+@docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
 @docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview
-@docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview
+@docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff
 @docs docsDecoder
 
 -}
 
+import ApiDiff exposing (ApiDiff)
 import Dict exposing (Dict)
 import Elm.Docs as Docs
 import Elm.Error exposing (Error)
@@ -42,6 +43,7 @@ type alias Data =
     , docs : Dict.Dict String Docs
     , manifests : Dict.Dict String Project
     , preview : Maybe Preview
+    , diff : Maybe ApiDiff
     }
 
 
@@ -67,6 +69,7 @@ empty =
     , docs = Dict.empty
     , manifests = Dict.empty
     , preview = Nothing
+    , diff = Nothing
     }
 
 
@@ -258,3 +261,19 @@ fetchManifest toMsg author project version =
         { url = Url.absolute [ "packages", author, project, V.toString version, "elm.json" ] []
         , expect = Http.expectJson toMsg Project.decoder
         }
+
+
+
+-- DIFF
+
+
+{-| -}
+getDiff : Data -> Maybe ApiDiff
+getDiff data =
+    data.diff
+
+
+{-| -}
+addDiff : Maybe ApiDiff -> Data -> Data
+addDiff maybeDiff data =
+    { data | diff = maybeDiff }

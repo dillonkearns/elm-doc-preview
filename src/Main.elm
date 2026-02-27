@@ -6,6 +6,7 @@ module Main exposing (main)
 
 -}
 
+import ApiDiff
 import Browser
 import Browser.Navigation as Nav
 import Elm.Project as Project exposing (Project)
@@ -68,6 +69,7 @@ subscriptions model =
         [ Ports.onReadme OnReadme
         , Ports.onDocs OnDocs
         , Ports.onManifest OnManifest
+        , Ports.onDiff OnDiff
         , Ports.locationHrefRequested LinkClicked
         ]
 
@@ -124,6 +126,7 @@ type Msg
     | OnReadme Ports.Readme
     | OnDocs Ports.Docs
     | OnManifest Ports.Manifest
+    | OnDiff Ports.Diff
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -174,6 +177,9 @@ update message model =
 
         OnManifest manifest ->
             ( updateManifest manifest model, Cmd.none )
+
+        OnDiff diff ->
+            ( updateDiff diff model, Cmd.none )
 
 
 requestHref : Nav.Key -> String -> Cmd msg
@@ -290,6 +296,42 @@ updatePageManifest author project version manifest model =
             case model.page of
                 Docs m ->
                     Docs (Docs.updateManifest author project version manifest m)
+
+                _ ->
+                    setPageSession newSession model.page
+    in
+    { model | page = newPage }
+
+
+updateDiff : Ports.Diff -> Model -> Model
+updateDiff { author, project, version, diff } model =
+    case Version.fromString version of
+        Just v ->
+            let
+                maybeDiff =
+                    case Decode.decodeValue ApiDiff.decoder diff of
+                        Ok d ->
+                            d
+
+                        Err _ ->
+                            Nothing
+            in
+            updatePageDiff author project v maybeDiff model
+
+        Nothing ->
+            model
+
+
+updatePageDiff : String -> String -> Version -> Maybe ApiDiff.ApiDiff -> Model -> Model
+updatePageDiff author project version maybeDiff model =
+    let
+        newSession =
+            Session.addDiff maybeDiff (exit model)
+
+        newPage =
+            case model.page of
+                Docs m ->
+                    Docs (Docs.updateDiff author project version maybeDiff { m | session = newSession })
 
                 _ ->
                     setPageSession newSession model.page

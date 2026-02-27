@@ -43,5 +43,8 @@ ws.onmessage = function (event) {
     case "docs":
       app.ports.onDocs.send(msg.data);
       break;
+    case "diff":
+      app.ports.onDiff.send(msg.data);
+      break;
   }
 };

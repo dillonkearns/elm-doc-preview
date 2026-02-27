@@ -2,7 +2,7 @@ module Page.Docs exposing
     ( Focus(..), Model, Msg
     , init, update, view
     , toTitle
-    , updateReadme, updateDocs, updateManifest
+    , updateReadme, updateDocs, updateManifest, updateDiff
     )
 
 {-|
@@ -10,10 +10,11 @@ module Page.Docs exposing
 @docs Focus, Model, Msg
 @docs init, update, view
 @docs toTitle
-@docs updateReadme, updateDocs, updateManifest
+@docs updateReadme, updateDocs, updateManifest, updateDiff
 
 -}
 
+import ApiDiff exposing (ApiDiff, DiffStatus(..))
 import Browser.Dom as Dom
 import DateFormat
 import Elm.Constraint as Constraint exposing (Constraint)
@@ -58,6 +59,8 @@ type alias Model =
     , readme : Status String
     , docs : Status Docs
     , manifest : Status Project
+    , diffData : Maybe ApiDiff
+    , diffMode : Bool
     }
 
 
@@ -80,6 +83,10 @@ type Status a
 {-| -}
 init : Session.Data -> String -> String -> Maybe Version -> Focus -> ( Model, Cmd Msg )
 init session author project version focus =
+    let
+        restoredDiff =
+            Session.getDiff session
+    in
     case Session.getReleases session author project of
         Just releases ->
             let
@@ -87,10 +94,10 @@ init session author project version focus =
                     Release.getLatest releases
             in
             getInfo latest <|
-                Model session author project version focus "" (Success latest) Loading Loading Loading
+                Model session author project version focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
 
         Nothing ->
-            ( Model session author project version focus "" Loading Loading Loading Loading
+            ( Model session author project version focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing)
             , Session.fetchReleases GotReleases author project
             )
 
@@ -160,6 +167,7 @@ scrollIfNeeded focus =
 type Msg
     = QueryChanged String
     | ScrollAttempted (Result Dom.Error ())
+    | ToggleDiffMode
     | GotReleases (Result Http.Error (OneOrMore Release.Release))
     | GotReadme Version (Result Http.Error String)
     | GotDocs Version (Result Http.Error Docs)
@@ -177,6 +185,11 @@ update msg model =
 
         ScrollAttempted _ ->
             ( model
+            , Cmd.none
+            )
+
+        ToggleDiffMode ->
+            ( { model | diffMode = not model.diffMode }
             , Cmd.none
             )
 
@@ -298,6 +311,16 @@ updateManifest author project version manifest model =
 
     else
         { model | session = newSession }
+
+
+{-| -}
+updateDiff : String -> String -> Version -> Maybe ApiDiff -> Model -> Model
+updateDiff author project version maybeDiff model =
+    if author == model.author && project == model.project && Just version == model.version then
+        { model | diffData = maybeDiff }
+
+    else
+        model
 
 
 
@@ -425,7 +448,7 @@ viewContent model =
                     lazy viewReadme model.readme
 
         Module name tag ->
-            lazy5 viewModule model.author model.project model.version name model.docs
+            viewModule model.author model.project model.version name model.docs model.diffData model.diffMode
 
 
 
@@ -452,8 +475,8 @@ viewReadme status =
 -- VIEW MODULE
 
 
-viewModule : String -> String -> Maybe Version -> String -> Status Docs -> Html msg
-viewModule author project version name status =
+viewModule : String -> String -> Maybe Version -> String -> Status Docs -> Maybe ApiDiff -> Bool -> Html msg
+viewModule author project version name status diffData diffMode =
     case status of
         Success (Modules allDocs) ->
             case findModule name allDocs of
@@ -463,7 +486,7 @@ viewModule author project version name status =
                             h1 [ class "block-list-title" ] [ text name ]
 
                         info =
-                            Block.makeInfo author project version name allDocs
+                            Block.makeInfo author project version name allDocs diffData diffMode
 
                         blocks =
                             List.map (Block.view info) (Docs.toBlocks docs)
@@ -513,20 +536,177 @@ viewSidebar model =
     div
         [ class "pkg-nav"
         ]
-        [ lazy4 viewReadmeLink model.author model.project model.version model.focus
-        , br [] []
-        , lazy4 viewBrowseSourceLink model.author model.project model.version model.latest
-        , h2 [ style "margin-bottom" "0" ] [ text "Modules" ]
-        , input
-            [ placeholder "Search"
-            , value model.query
-            , onInput QueryChanged
+        (viewDiffToggle model.diffData
+            :: (if model.diffMode then
+                    case model.diffData of
+                        Just diff ->
+                            [ viewDiffSidebar model diff ]
+
+                        Nothing ->
+                            viewNormalSidebar model
+
+                else
+                    viewNormalSidebar model
+               )
+        )
+
+
+viewNormalSidebar : Model -> List (Html Msg)
+viewNormalSidebar model =
+    [ lazy4 viewReadmeLink model.author model.project model.version model.focus
+    , br [] []
+    , lazy4 viewBrowseSourceLink model.author model.project model.version model.latest
+    , h2 [ style "margin-bottom" "0" ] [ text "Modules" ]
+    , input
+        [ placeholder "Search"
+        , value model.query
+        , onInput QueryChanged
+        ]
+        []
+    , viewSidebarModules model
+    , viewInstall model.manifest model.author model.project
+    , viewLicense model.manifest
+    , viewDependencies model.manifest
+    ]
+
+
+viewDiffToggle : Maybe ApiDiff -> Html Msg
+viewDiffToggle maybeDiff =
+    case maybeDiff of
+        Just diff ->
+            if ApiDiff.hasChanges diff then
+                button
+                    [ class "diff-toggle"
+                    , onClick ToggleDiffMode
+                    ]
+                    [ text "Toggle API Diff" ]
+
+            else
+                text ""
+
+        Nothing ->
+            text ""
+
+
+viewDiffSidebar : Model -> ApiDiff -> Html Msg
+viewDiffSidebar model diff =
+    let
+        magnitudeClass =
+            case diff.magnitude of
+                "MAJOR" ->
+                    "diff-magnitude diff-magnitude-major"
+
+                "MINOR" ->
+                    "diff-magnitude diff-magnitude-minor"
+
+                _ ->
+                    "diff-magnitude diff-magnitude-patch"
+    in
+    div [ class "diff-sidebar" ]
+        [ h2 []
+            [ text "API Diff "
+            , span [ class magnitudeClass ] [ text diff.magnitude ]
             ]
-            []
-        , viewSidebarModules model
-        , viewInstall model.manifest model.author model.project
-        , viewLicense model.manifest
-        , viewDependencies model.manifest
+        , if not (ApiDiff.hasChanges diff) then
+            p [] [ text "No API changes" ]
+
+          else
+            div []
+                (viewDiffAddedModules model diff.addedModules
+                    ++ viewDiffRemovedModules diff.removedModules
+                    ++ List.concatMap (viewDiffChangedModule model) diff.changedModules
+                )
+        ]
+
+
+viewDiffAddedModules : Model -> List String -> List (Html Msg)
+viewDiffAddedModules model modules =
+    if List.isEmpty modules then
+        []
+
+    else
+        [ h3 [ class "diff-section-title diff-item-added" ] [ text "Added Modules" ]
+        , ul []
+            (List.map
+                (\name ->
+                    li [ class "diff-item-added" ]
+                        [ span [ class "diff-prefix" ] [ text "+" ]
+                        , viewModuleLink model name
+                        ]
+                )
+                modules
+            )
+        ]
+
+
+viewDiffRemovedModules : List String -> List (Html msg)
+viewDiffRemovedModules modules =
+    if List.isEmpty modules then
+        []
+
+    else
+        [ h3 [ class "diff-section-title diff-item-removed" ] [ text "Removed Modules" ]
+        , ul []
+            (List.map
+                (\name ->
+                    li [ class "diff-item-removed" ]
+                        [ span [ class "diff-prefix" ] [ text "-" ]
+                        , span [ class "diff-removed-module" ] [ text name ]
+                        ]
+                )
+                modules
+            )
+        ]
+
+
+viewDiffChangedModule : Model -> ApiDiff.ModuleChanges -> List (Html Msg)
+viewDiffChangedModule model mc =
+    [ h3 [ class "diff-section-title" ] [ viewModuleLink model mc.name ]
+    ]
+        ++ viewDiffItemList model mc.name "diff-item-added" "+" mc.added
+        ++ viewDiffItemList model mc.name "diff-item-changed" "~" mc.changed
+        ++ viewDiffRemovedItems mc.removed
+
+
+viewDiffItemList : Model -> String -> String -> String -> List String -> List (Html Msg)
+viewDiffItemList model moduleName cssClass prefix items =
+    if List.isEmpty items then
+        []
+
+    else
+        [ ul []
+            (List.map
+                (\name ->
+                    li [ class cssClass ]
+                        [ span [ class "diff-prefix" ] [ text prefix ]
+                        , a
+                            [ href (Href.toModule model.author model.project model.version moduleName (Just name))
+                            , class "pkg-nav-module"
+                            ]
+                            [ text name ]
+                        ]
+                )
+                items
+            )
+        ]
+
+
+viewDiffRemovedItems : List String -> List (Html msg)
+viewDiffRemovedItems items =
+    if List.isEmpty items then
+        []
+
+    else
+        [ ul []
+            (List.map
+                (\name ->
+                    li [ class "diff-item-removed" ]
+                        [ span [ class "diff-prefix" ] [ text "-" ]
+                        , text name
+                        ]
+                )
+                items
+            )
         ]
 
 

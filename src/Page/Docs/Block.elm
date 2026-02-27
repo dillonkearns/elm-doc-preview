@@ -6,6 +6,7 @@ module Page.Docs.Block exposing (Info, makeInfo, view)
 
 -}
 
+import ApiDiff exposing (ApiDiff, DiffStatus(..))
 import Dict
 import Elm.Docs as Docs
 import Elm.Type as Type
@@ -59,9 +60,24 @@ view info block =
                 ]
 
 
-viewCodeBlock : String -> String -> List (Line msg) -> Html msg
-viewCodeBlock name comment header =
-    div [ class "docs-block", id name ]
+viewCodeBlock : Info -> String -> String -> List (Line msg) -> Html msg
+viewCodeBlock info name comment header =
+    let
+        diffClass =
+            case info.diffStatus name of
+                Added ->
+                    "diff-added"
+
+                Changed ->
+                    "diff-changed"
+
+                ModuleAdded ->
+                    "diff-added"
+
+                Unchanged ->
+                    ""
+    in
+    div [ class "docs-block", class diffClass, id name ]
         [ div [ class "docs-header" ] (List.map (div []) header)
         , div [ class "docs-comment" ] [ Markdown.block comment ]
         ]
@@ -77,7 +93,7 @@ viewValue info { name, comment, tipe } =
         nameHtml =
             toBoldLink info name
     in
-    viewCodeBlock name comment <|
+    viewCodeBlock info name comment <|
         case toLines info Other (String.length name + 3) tipe of
             One _ line ->
                 [ nameHtml :: space :: colon :: space :: line ]
@@ -101,7 +117,7 @@ viewBinop info { name, comment, tipe } =
         nameHtml =
             makeLink info [ bold ] name ("(" ++ name ++ ")")
     in
-    viewCodeBlock name comment <|
+    viewCodeBlock info name comment <|
         case toLines info Other (String.length name + 3) tipe of
             One _ line ->
                 [ nameHtml :: space :: colon :: space :: line ]
@@ -131,7 +147,7 @@ viewAlias info { name, args, comment, tipe } =
             , equals
             ]
     in
-    viewCodeBlock name comment <|
+    viewCodeBlock info name comment <|
         aliasNameLine
             :: List.map indentFour (linesToList (toLines info Other 4 tipe))
 
@@ -149,7 +165,7 @@ viewUnion info { name, comment, args, tags } =
         nameLine =
             [ keyword "type", space, toBoldLink info name, text varsString ]
     in
-    viewCodeBlock name comment <|
+    viewCodeBlock info name comment <|
         case tags of
             [] ->
                 [ nameLine ]
@@ -184,6 +200,7 @@ type alias Info =
     , version : Maybe V.Version
     , moduleName : String
     , typeNameDict : TypeNameDict
+    , diffStatus : String -> DiffStatus
     }
 
 
@@ -192,17 +209,26 @@ type alias TypeNameDict =
 
 
 {-| -}
-makeInfo : String -> String -> Maybe V.Version -> String -> List Docs.Module -> Info
-makeInfo author project version moduleName docsList =
+makeInfo : String -> String -> Maybe V.Version -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Info
+makeInfo author project version moduleName docsList maybeDiff diffMode =
     let
         addUnion home union docs =
             Dict.insert (home ++ "." ++ union.name) ( home, union.name ) docs
 
         addModule docs dict =
             List.foldl (addUnion docs.name) dict docs.unions
+
+        statusFn =
+            case ( diffMode, maybeDiff ) of
+                ( True, Just diff ) ->
+                    \name -> ApiDiff.lookupItem diff moduleName name
+
+                _ ->
+                    \_ -> Unchanged
     in
-    Info author project version moduleName <|
-        List.foldl addModule Dict.empty docsList
+    Info author project version moduleName
+        (List.foldl addModule Dict.empty docsList)
+        statusFn
 
 
 

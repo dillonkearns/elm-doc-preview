@@ -384,3 +384,106 @@ Not really any of those on the website though AFAIK.
   letter-spacing: -0.2em;
   content: "\00a0";
 }
+
+/* DIFF MODE */
+
+.diff-toggle {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 0.9em;
+  font-family: inherit;
+  color: #1184ce;
+  background-color: #f0f8ff;
+  border: 1px solid #1184ce;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.diff-toggle:hover {
+  background-color: #e0f0ff;
+}
+
+/* Doc block annotations */
+.docs-block.diff-added {
+  background-color: #dafbe1;
+  border-left: 4px solid #1a7f37;
+  padding-left: 12px;
+}
+
+.docs-block.diff-changed {
+  background-color: #fff8c5;
+  border-left: 4px solid #bf8700;
+  padding-left: 12px;
+}
+
+/* Sidebar */
+.diff-sidebar h2 {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.diff-sidebar h3 {
+  font-size: 1em;
+  margin: 12px 0 4px 0;
+}
+
+.diff-section-title {
+  font-weight: bold;
+}
+
+.diff-magnitude {
+  display: inline-block;
+  font-size: 0.7em;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.diff-magnitude-major {
+  background-color: #ffebe9;
+  color: #cf222e;
+  border: 1px solid #cf222e;
+}
+
+.diff-magnitude-minor {
+  background-color: #dafbe1;
+  color: #1a7f37;
+  border: 1px solid #1a7f37;
+}
+
+.diff-magnitude-patch {
+  background-color: #ddf4ff;
+  color: #0969da;
+  border: 1px solid #0969da;
+}
+
+/* Sidebar item prefixes and colors */
+.diff-item-added {
+  color: #1a7f37;
+}
+
+.diff-item-changed {
+  color: #bf8700;
+}
+
+.diff-item-removed {
+  color: #cf222e;
+  text-decoration: line-through;
+}
+
+.diff-prefix {
+  font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-weight: bold;
+  margin-right: 4px;
+}
+
+/* Removed modules section */
+.diff-removed-module {
+  color: #cf222e;
+  text-decoration: line-through;
+  font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}

@@ -1,13 +1,13 @@
 port module Ports exposing
-    ( Docs, Manifest, Readme
-    , onReadme, onDocs, onManifest
+    ( Diff, Docs, Manifest, Readme
+    , onReadme, onDocs, onManifest, onDiff
     , locationHrefRequested
     )
 
 {-|
 
-@docs Docs, Manifest, Readme
-@docs onReadme, onDocs, onManifest
+@docs Diff, Docs, Manifest, Readme
+@docs onReadme, onDocs, onManifest, onDiff
 @docs locationHrefRequested
 
 -}
@@ -43,6 +43,15 @@ type alias Manifest =
 
 
 {-| -}
+type alias Diff =
+    { author : String
+    , project : String
+    , version : String
+    , diff : Encode.Value
+    }
+
+
+{-| -}
 port onReadme : (Readme -> msg) -> Sub msg
 
 
@@ -52,6 +61,10 @@ port onDocs : (Docs -> msg) -> Sub msg
 
 {-| -}
 port onManifest : (Manifest -> msg) -> Sub msg
+
+
+{-| -}
+port onDiff : (Diff -> msg) -> Sub msg
 
 
 {-| -}
