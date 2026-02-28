@@ -103,13 +103,18 @@ function buildDocs(workDir: string): object | null {
   const elm = elmBinPath();
   const docsPath = path.join(workDir, "docs.json");
 
+  const seedStart = Date.now();
   restoreSeed();
+  console.log(`restoreSeed: ${Date.now() - seedStart}ms`);
 
+  const makeStart = Date.now();
   const result = spawnSync(elm, ["make", `--docs=${docsPath}`], {
     cwd: workDir,
     env: { ...process.env, ELM_HOME },
     timeout: 55000,
   });
+
+  console.log(`elm make: ${Date.now() - makeStart}ms`);
 
   if (fs.existsSync(docsPath)) {
     return JSON.parse(fs.readFileSync(docsPath, "utf-8"));
@@ -146,17 +151,21 @@ export default async function handler(
   console.log(`Building docs for ${owner}/${repo}@${ref}`);
 
   try {
+    const t0 = Date.now();
+
     // Step 1: Resolve ref to commit SHA
     const sha = await resolveRef(owner, repo, ref);
-    console.log(`Resolved ${ref} -> ${sha}`);
+    console.log(`Resolved ${ref} -> ${sha} (${Date.now() - t0}ms)`);
 
     // Step 2: Download and extract source
+    const t1 = Date.now();
     const workDir = await downloadAndExtract(owner, repo, sha);
-    console.log(`Source ready at ${workDir}`);
+    console.log(`Source ready at ${workDir} (${Date.now() - t1}ms)`);
 
     // Step 3: Build docs
+    const t2 = Date.now();
     const docs = buildDocs(workDir);
-    console.log(`Docs built successfully`);
+    console.log(`Docs built successfully (${Date.now() - t2}ms, total: ${Date.now() - t0}ms)`);
 
     // If the ref is a full commit SHA, cache forever (immutable).
     // Otherwise (branch/tag), use a short TTL so new pushes are picked up.
@@ -167,6 +176,7 @@ export default async function handler(
       res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
     }
 
+    res.setHeader("Server-Timing", `resolve;dur=${t1 - t0}, download;dur=${t2 - t1}, build;dur=${Date.now() - t2}, total;dur=${Date.now() - t0}`);
     return res.status(200).json(docs);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
