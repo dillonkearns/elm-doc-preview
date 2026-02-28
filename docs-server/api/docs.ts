@@ -178,9 +178,15 @@ export default async function handler(
 
     res.setHeader("Server-Timing", `resolve;dur=${t1 - t0}, download;dur=${t2 - t1}, build;dur=${Date.now() - t2}, total;dur=${Date.now() - t0}`);
     if (req.query.__debug !== undefined) {
+      const seedParent = path.join(__dirname, "..");
+      let seedParentContents: string[] = [];
+      try { seedParentContents = fs.readdirSync(seedParent); } catch {}
       return res.status(200).json({
         timing: { resolve: t1 - t0, download: t2 - t1, build: Date.now() - t2, total: Date.now() - t0 },
         seedExists: fs.existsSync(SEED_DIR),
+        seedDir: SEED_DIR,
+        __dirname,
+        seedParentContents,
         elmHomeHasRegistry: fs.existsSync(path.join(ELM_HOME, "0.19.1", "packages", "registry.dat")),
       });
     }
