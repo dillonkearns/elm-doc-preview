@@ -11,12 +11,12 @@
   ],
   "functions": {
     "api/docs.ts": {
-      "includeFiles": "node_modules/elm/**",
+      "includeFiles": ["node_modules/elm/**", "elm-home-seed/**"],
       "maxDuration": 60,
       "memory": 1024
     },
     "api/preview.ts": {
-      "includeFiles": "node_modules/elm/**",
+      "includeFiles": ["node_modules/elm/**", "elm-home-seed/**"],
       "maxDuration": 60,
       "memory": 1024
     }

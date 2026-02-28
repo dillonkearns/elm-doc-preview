@@ -7,6 +7,19 @@ import tar from "tar";
 
 const TMP_DIR = os.tmpdir();
 const ELM_HOME = path.join(TMP_DIR, ".elm-home");
+const SEED_DIR = path.join(__dirname, "..", "elm-home-seed");
+
+function restoreSeed(): void {
+  // Skip if ELM_HOME already populated (warm container)
+  if (fs.existsSync(path.join(ELM_HOME, "0.19.1", "packages", "registry.dat"))) {
+    return;
+  }
+  // Skip if no bundled seed (local dev without build step)
+  if (!fs.existsSync(SEED_DIR)) {
+    return;
+  }
+  fs.cpSync(SEED_DIR, ELM_HOME, { recursive: true });
+}
 
 function elmBinPath(): string {
   const candidates = [
@@ -90,8 +103,7 @@ function buildDocs(workDir: string): object | null {
   const elm = elmBinPath();
   const docsPath = path.join(workDir, "docs.json");
 
-  // Ensure ELM_HOME exists
-  fs.mkdirSync(ELM_HOME, { recursive: true });
+  restoreSeed();
 
   const result = spawnSync(elm, ["make", `--docs=${docsPath}`], {
     cwd: workDir,
