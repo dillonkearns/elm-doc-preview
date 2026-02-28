@@ -65,7 +65,11 @@ decoder =
         (D.field "name" (D.andThen splitName D.string))
         (D.field "summary" D.string)
         (D.field "license" D.string)
-        (D.field "versions" (D.list V.decoder))
+        (D.oneOf
+            [ D.field "versions" (D.list V.decoder)
+            , D.field "version" (D.map List.singleton V.decoder)
+            ]
+        )
 
 
 splitName : String -> D.Decoder (String -> String -> List V.Version -> Entry)
