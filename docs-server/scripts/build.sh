@@ -9,3 +9,6 @@ bash "$SCRIPT_DIR/../benchmark/generate-seed.sh" "$SEED_DIR"
 # Apply "stripped" strategy — remove docs/readme/license from packages
 find "$SEED_DIR/0.19.1/packages" -mindepth 3 \
   \( -name "docs.json" -o -name "README.md" -o -name "LICENSE" \) -delete
+
+# Vercel expects a static output directory after the build step
+mkdir -p "$SCRIPT_DIR/../public"
