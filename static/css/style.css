@@ -118,7 +118,7 @@ pre {
 
 .center {
   flex: 1;
-  max-width: 920px;
+  max-width: 1080px;
   width: 100%;
   margin-left: auto;
   margin-right: auto;
@@ -222,7 +222,7 @@ pre {
 /* PACKAGE NAVIGATION */
 
 .pkg-nav {
-  width: 200px;
+  width: 300px;
   display: inline-block;
   position: sticky;
   top: 0;
@@ -232,6 +232,7 @@ pre {
   border-left: 1px solid #eeeeee;
   background-color: rgba(255, 255, 255, 0.75);
   max-height: 100vh;
+  overflow-x: hidden;
   overflow-y: auto;
   box-sizing: border-box;
 }
@@ -241,12 +242,13 @@ pre {
 }
 
 .pkg-nav input {
-  width: 200px;
+  width: 100%;
   font-size: 1em;
   padding: 4px;
   margin: 10px 0;
   border: 1px solid #eeeeee;
   border-radius: 6px;
+  box-sizing: border-box;
 }
 
 .pkg-nav ul {
@@ -271,6 +273,12 @@ pre {
   font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier,
     monospace;
   text-overflow: ellipsis;
+}
+
+.pkg-nav > ul .pkg-nav-module,
+.pkg-nav > ul .pkg-nav-value {
+  overflow: hidden;
+  display: block;
 }
 
 .pkg-nav-search-chunk {
@@ -343,7 +351,7 @@ pre {
 /* CATALOG SIDEBAR */
 
 .catalog-sidebar {
-  width: 200px;
+  width: 300px;
   display: inline-block;
   position: sticky;
   top: 0;
