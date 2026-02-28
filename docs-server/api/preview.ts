@@ -357,30 +357,36 @@ export default async function handler(
   console.log(`Building preview for ${owner}/${repo}@${ref}`);
 
   try {
-    // Step 1: Resolve ref + download source in parallel
+    // Step 1: Fire PR lookup immediately — response arrives during later blocking work
+    const prPromise = lookupPullRequest(owner, repo, ref);
+
+    // Step 2: Resolve ref + download source
     const { sha, workDir } = await fetchSource(owner, repo, ref);
     console.log(`Source ready for ${owner}/${repo}@${sha}`);
 
-    // Step 2: Build docs
+    // Step 3: Fire shouldRunDiff (needs workDir) — its network fetch overlaps with buildDocs
+    const diffCheckPromise = shouldRunDiff(workDir);
+
+    // Step 4: Build docs (spawnSync blocks event loop ~400-800ms; network responses arrive during this)
     const docs = buildDocs(workDir);
     console.log(`Docs built successfully`);
 
-    // Step 3: Read README.md from the repo (best-effort)
+    // Step 5: Read README.md from the repo (best-effort)
     const readmePath = path.join(workDir, "README.md");
     const readme = fs.existsSync(readmePath)
       ? fs.readFileSync(readmePath, "utf-8")
       : null;
 
-    // Step 4: Build diff (best-effort, null on failure) + PR lookup
+    // Step 6: Await shouldRunDiff, conditionally build diff
     // Skip diff for historical commits where a newer version is already published,
     // since elm diff compares against the latest published version and would
     // produce confusing reverse results.
-    const [runDiff, pullRequestUrl] = await Promise.all([
-      shouldRunDiff(workDir),
-      lookupPullRequest(owner, repo, ref),
-    ]);
+    const runDiff = await diffCheckPromise;
     const diff = runDiff ? buildDiff(workDir) : null;
     console.log(`Diff: ${runDiff ? (diff ? diff.magnitude : "no changes") : "skipped (historical commit)"}`);
+
+    // Step 7: Await PR lookup
+    const pullRequestUrl = await prPromise;
     console.log(`PR: ${pullRequestUrl || "none"}`);
 
     // If the ref is a full commit SHA, cache forever (immutable).
