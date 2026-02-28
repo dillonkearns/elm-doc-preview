@@ -464,6 +464,14 @@ Not really any of those on the website though AFAIK.
   font-weight: bold;
 }
 
+.diff-section-title-added {
+  color: #1a7f37;
+}
+
+.diff-section-title-removed {
+  color: #cf222e;
+}
+
 .diff-magnitude {
   display: inline-block;
   font-size: 0.7em;
@@ -492,29 +500,41 @@ Not really any of those on the website though AFAIK.
   border: 1px solid #0969da;
 }
 
-/* Sidebar item prefixes and colors */
-.diff-item-added {
-  color: #1a7f37;
+/* Sidebar diff items */
+.diff-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.diff-item-changed {
-  color: #bf8700;
-}
-
-.diff-item-removed {
-  color: #cf222e;
+.diff-item-removed .diff-item-name {
+  color: #656d76;
   text-decoration: line-through;
 }
 
-.diff-prefix {
-  font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
-  font-weight: bold;
-  margin-right: 4px;
+.diff-status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: auto;
+}
+
+.diff-status-dot-added {
+  background-color: #1a7f37;
+}
+
+.diff-status-dot-changed {
+  background-color: #bf8700;
+}
+
+.diff-status-dot-removed {
+  background-color: #cf222e;
 }
 
 /* Removed modules section */
 .diff-removed-module {
-  color: #cf222e;
+  color: #656d76;
   text-decoration: line-through;
   font-family: "Source Code Pro", Consolas, "Liberation Mono", Menlo, Courier, monospace;
 }

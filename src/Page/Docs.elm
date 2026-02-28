@@ -811,13 +811,13 @@ viewDiffAddedModules model modules =
         []
 
     else
-        [ h3 [ class "diff-section-title diff-item-added" ] [ text "Added Modules" ]
+        [ h3 [ class "diff-section-title diff-section-title-added" ] [ text "Added Modules" ]
         , ul []
             (List.map
                 (\name ->
-                    li [ class "diff-item-added" ]
-                        [ span [ class "diff-prefix" ] [ text "+" ]
-                        , viewModuleLink model name
+                    li [ class "diff-item" ]
+                        [ viewModuleLink model name
+                        , span [ class "diff-status-dot diff-status-dot-added" ] []
                         ]
                 )
                 modules
@@ -831,13 +831,13 @@ viewDiffRemovedModules modules =
         []
 
     else
-        [ h3 [ class "diff-section-title diff-item-removed" ] [ text "Removed Modules" ]
+        [ h3 [ class "diff-section-title diff-section-title-removed" ] [ text "Removed Modules" ]
         , ul []
             (List.map
                 (\name ->
-                    li [ class "diff-item-removed" ]
-                        [ span [ class "diff-prefix" ] [ text "-" ]
-                        , span [ class "diff-removed-module" ] [ text name ]
+                    li [ class "diff-item diff-item-removed" ]
+                        [ span [ class "diff-item-name diff-removed-module" ] [ text name ]
+                        , span [ class "diff-status-dot diff-status-dot-removed" ] []
                         ]
                 )
                 modules
@@ -849,13 +849,13 @@ viewDiffChangedModule : Model -> ApiDiff.ModuleChanges -> List (Html Msg)
 viewDiffChangedModule model mc =
     [ h3 [ class "diff-section-title" ] [ viewModuleLink model mc.name ]
     ]
-        ++ viewDiffItemList model mc.name "diff-item-added" "+" mc.added
-        ++ viewDiffItemList model mc.name "diff-item-changed" "~" mc.changed
+        ++ viewDiffItemList model mc.name "diff-status-dot-added" mc.added
+        ++ viewDiffItemList model mc.name "diff-status-dot-changed" mc.changed
         ++ viewDiffRemovedItems mc.removed
 
 
-viewDiffItemList : Model -> String -> String -> String -> List String -> List (Html Msg)
-viewDiffItemList model moduleName cssClass prefix items =
+viewDiffItemList : Model -> String -> String -> List String -> List (Html Msg)
+viewDiffItemList model moduleName dotClass items =
     if List.isEmpty items then
         []
 
@@ -872,13 +872,13 @@ viewDiffItemList model moduleName cssClass prefix items =
         [ ul []
             (List.map
                 (\name ->
-                    li [ class cssClass ]
-                        [ span [ class "diff-prefix" ] [ text prefix ]
-                        , a
+                    li [ class "diff-item" ]
+                        [ a
                             [ href (toModuleHref name)
                             , class "pkg-nav-module"
                             ]
                             [ text name ]
+                        , span [ class ("diff-status-dot " ++ dotClass) ] []
                         ]
                 )
                 items
@@ -895,9 +895,9 @@ viewDiffRemovedItems items =
         [ ul []
             (List.map
                 (\name ->
-                    li [ class "diff-item-removed" ]
-                        [ span [ class "diff-prefix" ] [ text "-" ]
-                        , text name
+                    li [ class "diff-item diff-item-removed" ]
+                        [ span [ class "diff-item-name" ] [ text name ]
+                        , span [ class "diff-status-dot diff-status-dot-removed" ] []
                         ]
                 )
                 items
