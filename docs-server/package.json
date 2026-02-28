@@ -3,9 +3,6 @@
   "engines": {
     "node": ">=20"
   },
-  "scripts": {
-    "build": "bash scripts/build.sh"
-  },
   "dependencies": {
     "elm": "0.19.1-6",
     "tar": "^6.2.1"

@@ -1,4 +1,5 @@
 {
+  "buildCommand": "bash scripts/build.sh",
   "rewrites": [
     {
       "source": "/:owner/:repo/:ref/docs.json",
