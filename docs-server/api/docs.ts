@@ -65,56 +65,62 @@ async function resolveRef(
   return data.sha;
 }
 
-async function downloadAndExtract(
+async function fetchSource(
   owner: string,
   repo: string,
-  sha: string
-): Promise<string> {
+  ref: string
+): Promise<{ sha: string; workDir: string }> {
+  const isFullSha = /^[0-9a-f]{40}$/i.test(ref);
+
+  // If ref is already a full SHA, check warm cache immediately (zero network)
+  if (isFullSha) {
+    const workDir = path.join(TMP_DIR, `elm-docs-${ref}`);
+    if (fs.existsSync(path.join(workDir, "elm.json"))) {
+      return { sha: ref, workDir };
+    }
+  }
+
+  // Fire resolve and download in parallel.
+  // Use codeload.github.com directly to skip the 302 redirect from github.com/archive/.
+  const tarballUrl = `https://codeload.github.com/${owner}/${repo}/tar.gz/${ref}`;
+  const [sha, tarballRes] = await Promise.all([
+    isFullSha ? ref : resolveRef(owner, repo, ref),
+    fetch(tarballUrl, { headers: { "User-Agent": "elm-docs-server" } }),
+  ]);
+
   const workDir = path.join(TMP_DIR, `elm-docs-${sha}`);
 
-  // Already extracted from a previous invocation on this warm container
+  // Check warm cache now that we know the SHA
   if (fs.existsSync(path.join(workDir, "elm.json"))) {
-    return workDir;
+    return { sha, workDir };
   }
 
-  const tarballUrl = `https://github.com/${owner}/${repo}/archive/${sha}.tar.gz`;
+  if (!tarballRes.ok) {
+    throw new Error(`Failed to download tarball: ${tarballRes.status}`);
+  }
+
   const tarPath = path.join(TMP_DIR, `${sha}.tar.gz`);
-
-  const res = await fetch(tarballUrl, {
-    headers: { "User-Agent": "elm-docs-server" },
-    redirect: "follow",
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to download tarball: ${res.status}`);
-  }
-
-  const arrayBuf = await res.arrayBuffer();
+  const arrayBuf = await tarballRes.arrayBuffer();
   fs.writeFileSync(tarPath, new Uint8Array(arrayBuf));
 
   fs.mkdirSync(workDir, { recursive: true });
   await tar.extract({ file: tarPath, cwd: workDir, strip: 1 });
   fs.unlinkSync(tarPath);
 
-  return workDir;
+  return { sha, workDir };
 }
 
 function buildDocs(workDir: string): object | null {
   const elm = elmBinPath();
   const docsPath = path.join(workDir, "docs.json");
 
-  const seedStart = Date.now();
   restoreSeed();
-  console.log(`restoreSeed: ${Date.now() - seedStart}ms`);
 
-  const makeStart = Date.now();
   const result = spawnSync(elm, ["make", `--docs=${docsPath}`], {
     cwd: workDir,
     env: { ...process.env, ELM_HOME },
     timeout: 55000,
   });
-
-  console.log(`elm make: ${Date.now() - makeStart}ms`);
 
   if (fs.existsSync(docsPath)) {
     return JSON.parse(fs.readFileSync(docsPath, "utf-8"));
@@ -153,19 +159,14 @@ export default async function handler(
   try {
     const t0 = Date.now();
 
-    // Step 1: Resolve ref to commit SHA
-    const sha = await resolveRef(owner, repo, ref);
-    console.log(`Resolved ${ref} -> ${sha} (${Date.now() - t0}ms)`);
+    // Step 1: Resolve ref + download source in parallel
+    const { sha, workDir } = await fetchSource(owner, repo, ref);
+    console.log(`Source ready for ${owner}/${repo}@${sha} (${Date.now() - t0}ms)`);
 
-    // Step 2: Download and extract source
+    // Step 2: Build docs
     const t1 = Date.now();
-    const workDir = await downloadAndExtract(owner, repo, sha);
-    console.log(`Source ready at ${workDir} (${Date.now() - t1}ms)`);
-
-    // Step 3: Build docs
-    const t2 = Date.now();
     const docs = buildDocs(workDir);
-    console.log(`Docs built successfully (${Date.now() - t2}ms, total: ${Date.now() - t0}ms)`);
+    console.log(`Docs built successfully (${Date.now() - t1}ms, total: ${Date.now() - t0}ms)`);
 
     // If the ref is a full commit SHA, cache forever (immutable).
     // Otherwise (branch/tag), use a short TTL so new pushes are picked up.
@@ -176,20 +177,6 @@ export default async function handler(
       res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
     }
 
-    res.setHeader("Server-Timing", `resolve;dur=${t1 - t0}, download;dur=${t2 - t1}, build;dur=${Date.now() - t2}, total;dur=${Date.now() - t0}`);
-    if (req.query.__debug !== undefined) {
-      const seedParent = path.join(__dirname, "..");
-      let seedParentContents: string[] = [];
-      try { seedParentContents = fs.readdirSync(seedParent); } catch {}
-      return res.status(200).json({
-        timing: { resolve: t1 - t0, download: t2 - t1, build: Date.now() - t2, total: Date.now() - t0 },
-        seedExists: fs.existsSync(SEED_DIR),
-        seedDir: SEED_DIR,
-        __dirname,
-        seedParentContents,
-        elmHomeHasRegistry: fs.existsSync(path.join(ELM_HOME, "0.19.1", "packages", "registry.dat")),
-      });
-    }
     return res.status(200).json(docs);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

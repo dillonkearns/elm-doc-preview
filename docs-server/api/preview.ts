@@ -65,38 +65,49 @@ async function resolveRef(
   return data.sha;
 }
 
-async function downloadAndExtract(
+async function fetchSource(
   owner: string,
   repo: string,
-  sha: string
-): Promise<string> {
+  ref: string
+): Promise<{ sha: string; workDir: string }> {
+  const isFullSha = /^[0-9a-f]{40}$/i.test(ref);
+
+  // If ref is already a full SHA, check warm cache immediately (zero network)
+  if (isFullSha) {
+    const workDir = path.join(TMP_DIR, `elm-docs-${ref}`);
+    if (fs.existsSync(path.join(workDir, "elm.json"))) {
+      return { sha: ref, workDir };
+    }
+  }
+
+  // Fire resolve and download in parallel.
+  // Use codeload.github.com directly to skip the 302 redirect from github.com/archive/.
+  const tarballUrl = `https://codeload.github.com/${owner}/${repo}/tar.gz/${ref}`;
+  const [sha, tarballRes] = await Promise.all([
+    isFullSha ? ref : resolveRef(owner, repo, ref),
+    fetch(tarballUrl, { headers: { "User-Agent": "elm-docs-server" } }),
+  ]);
+
   const workDir = path.join(TMP_DIR, `elm-docs-${sha}`);
 
-  // Already extracted from a previous invocation on this warm container
+  // Check warm cache now that we know the SHA
   if (fs.existsSync(path.join(workDir, "elm.json"))) {
-    return workDir;
+    return { sha, workDir };
   }
 
-  const tarballUrl = `https://github.com/${owner}/${repo}/archive/${sha}.tar.gz`;
+  if (!tarballRes.ok) {
+    throw new Error(`Failed to download tarball: ${tarballRes.status}`);
+  }
+
   const tarPath = path.join(TMP_DIR, `${sha}.tar.gz`);
-
-  const res = await fetch(tarballUrl, {
-    headers: { "User-Agent": "elm-docs-server" },
-    redirect: "follow",
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to download tarball: ${res.status}`);
-  }
-
-  const arrayBuf = await res.arrayBuffer();
+  const arrayBuf = await tarballRes.arrayBuffer();
   fs.writeFileSync(tarPath, new Uint8Array(arrayBuf));
 
   fs.mkdirSync(workDir, { recursive: true });
   await tar.extract({ file: tarPath, cwd: workDir, strip: 1 });
   fs.unlinkSync(tarPath);
 
-  return workDir;
+  return { sha, workDir };
 }
 
 function buildDocs(workDir: string): object | null {
@@ -346,25 +357,21 @@ export default async function handler(
   console.log(`Building preview for ${owner}/${repo}@${ref}`);
 
   try {
-    // Step 1: Resolve ref to commit SHA
-    const sha = await resolveRef(owner, repo, ref);
-    console.log(`Resolved ${ref} -> ${sha}`);
+    // Step 1: Resolve ref + download source in parallel
+    const { sha, workDir } = await fetchSource(owner, repo, ref);
+    console.log(`Source ready for ${owner}/${repo}@${sha}`);
 
-    // Step 2: Download and extract source
-    const workDir = await downloadAndExtract(owner, repo, sha);
-    console.log(`Source ready at ${workDir}`);
-
-    // Step 3: Build docs + look up PR in parallel
+    // Step 2: Build docs
     const docs = buildDocs(workDir);
     console.log(`Docs built successfully`);
 
-    // Step 4: Read README.md from the repo (best-effort)
+    // Step 3: Read README.md from the repo (best-effort)
     const readmePath = path.join(workDir, "README.md");
     const readme = fs.existsSync(readmePath)
       ? fs.readFileSync(readmePath, "utf-8")
       : null;
 
-    // Step 5: Build diff (best-effort, null on failure) + PR lookup
+    // Step 4: Build diff (best-effort, null on failure) + PR lookup
     // Skip diff for historical commits where a newer version is already published,
     // since elm diff compares against the latest published version and would
     // produce confusing reverse results.
