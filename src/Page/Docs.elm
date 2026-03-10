@@ -356,7 +356,7 @@ update msg model =
                                     Success rm
 
                                 Nothing ->
-                                    Failure
+                                    Success ""
                         , diffData = response.diff
                         , diffMode = True
                         , pullRequestUrl = response.pullRequestUrl
