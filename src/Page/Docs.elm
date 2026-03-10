@@ -582,6 +582,11 @@ viewContent model =
                 Success (Error error) ->
                     lazy Utils.Error.view error
 
+                Failure ->
+                    div
+                        (class "block-list" :: Problem.styles)
+                        (Problem.offline "docs.json")
+
                 _ ->
                     lazy viewReadme model.readme
 
