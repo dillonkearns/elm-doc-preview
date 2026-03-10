@@ -134,7 +134,7 @@ function buildDocs(workDir: string): object | null {
   );
 }
 
-// -- Diff computation (compare two docs.json arrays) --
+// -- Diff parsing (ported from lib/elm-doc-server.ts) --
 
 interface ApiDiff {
   magnitude: string;
@@ -150,121 +150,92 @@ interface ApiModuleChanges {
   removed: string[];
 }
 
-interface DocsModule {
-  name: string;
-  unions: { name: string; args: unknown; cases: unknown }[];
-  aliases: { name: string; args: unknown; type: unknown }[];
-  values: { name: string; type: unknown }[];
-  binops: { name: string; type: unknown; associativity: string; precedence: number }[];
-}
-
-function computeDiff(
-  baseDocs: DocsModule[],
-  headDocs: DocsModule[]
-): ApiDiff | null {
-  const baseByName = new Map(baseDocs.map((m) => [m.name, m]));
-  const headByName = new Map(headDocs.map((m) => [m.name, m]));
-
-  const addedModules = headDocs
-    .filter((m) => !baseByName.has(m.name))
-    .map((m) => m.name);
-
-  const removedModules = baseDocs
-    .filter((m) => !headByName.has(m.name))
-    .map((m) => m.name);
-
-  const changedModules: ApiModuleChanges[] = [];
-
-  for (const headMod of headDocs) {
-    const baseMod = baseByName.get(headMod.name);
-    if (!baseMod) continue;
-
-    const changes = diffModule(baseMod, headMod);
-    if (changes) {
-      changedModules.push(changes);
-    }
-  }
-
-  if (
-    addedModules.length === 0 &&
-    removedModules.length === 0 &&
-    changedModules.length === 0
-  ) {
+function parseDiffOutput(output: string): ApiDiff | null {
+  const lines = output.split("\n");
+  if (lines.length === 0) {
     return null;
   }
 
-  const hasRemovals =
-    removedModules.length > 0 ||
-    changedModules.some((mc) => mc.removed.length > 0);
-
-  const hasAdditions =
-    addedModules.length > 0 ||
-    changedModules.some((mc) => mc.added.length > 0);
-
-  const magnitude = hasRemovals ? "MAJOR" : hasAdditions ? "MINOR" : "PATCH";
-
-  return { magnitude, addedModules, removedModules, changedModules };
-}
-
-function diffModule(
-  baseMod: DocsModule,
-  headMod: DocsModule
-): ApiModuleChanges | null {
-  const added: string[] = [];
-  const changed: string[] = [];
-  const removed: string[] = [];
-
-  diffItems(baseMod.unions, headMod.unions, (u) => u.name,
-    (a, b) => jsonEq(a.args, b.args) && jsonEq(a.cases, b.cases),
-    added, changed, removed);
-
-  diffItems(baseMod.aliases, headMod.aliases, (a) => a.name,
-    (a, b) => jsonEq(a.args, b.args) && jsonEq(a.type, b.type),
-    added, changed, removed);
-
-  diffItems(baseMod.values, headMod.values, (v) => v.name,
-    (a, b) => jsonEq(a.type, b.type),
-    added, changed, removed);
-
-  diffItems(baseMod.binops, headMod.binops, (b) => b.name,
-    (a, b) => jsonEq(a.type, b.type) && a.associativity === b.associativity && a.precedence === b.precedence,
-    added, changed, removed);
-
-  if (added.length === 0 && changed.length === 0 && removed.length === 0) {
+  // First line: "This is a MAJOR/MINOR/PATCH change."
+  const magnitudeMatch = lines[0].match(/This is a (MAJOR|MINOR|PATCH) change/);
+  if (!magnitudeMatch) {
     return null;
   }
 
-  return { name: baseMod.name, added, changed, removed };
-}
+  const diff: ApiDiff = {
+    magnitude: magnitudeMatch[1],
+    addedModules: [],
+    removedModules: [],
+    changedModules: [],
+  };
 
-function diffItems<T>(
-  baseItems: T[], headItems: T[],
-  getName: (item: T) => string,
-  isEqual: (a: T, b: T) => boolean,
-  added: string[], changed: string[], removed: string[]
-): void {
-  const baseByName = new Map(baseItems.map((item) => [getName(item), item]));
-  const headByName = new Map(headItems.map((item) => [getName(item), item]));
+  let i = 1;
+  while (i < lines.length) {
+    const line = lines[i];
 
-  for (const headItem of headItems) {
-    const name = getName(headItem);
-    const baseItem = baseByName.get(name);
-    if (!baseItem) {
-      added.push(name);
-    } else if (!isEqual(baseItem, headItem)) {
-      changed.push(name);
+    if (line.match(/^-+ ADDED MODULES/)) {
+      i++;
+      while (i < lines.length && !lines[i].match(/^-{4,}/)) {
+        if (lines[i].match(/^\s+\S/)) {
+          diff.addedModules.push(lines[i].trim());
+        }
+        i++;
+      }
+    } else if (line.match(/^-+ REMOVED MODULES/)) {
+      i++;
+      while (i < lines.length && !lines[i].match(/^-{4,}/)) {
+        if (lines[i].match(/^\s+\S/)) {
+          diff.removedModules.push(lines[i].trim());
+        }
+        i++;
+      }
+    } else if (line.match(/^-{4,} .+ - (MAJOR|MINOR|PATCH) -{4,}$/)) {
+      const moduleMatch = line.match(/^-{4,} (.+?) - (?:MAJOR|MINOR|PATCH) -{4,}$/);
+      if (moduleMatch) {
+        const mc: ApiModuleChanges = {
+          name: moduleMatch[1],
+          added: [],
+          changed: [],
+          removed: [],
+        };
+        i++;
+        let section: "added" | "changed" | "removed" | null = null;
+        while (i < lines.length && !lines[i].match(/^-{4,}/)) {
+          const sectionLine = lines[i].trim();
+          if (sectionLine === "Added:") {
+            section = "added";
+          } else if (sectionLine === "Changed:") {
+            section = "changed";
+          } else if (sectionLine === "Removed:") {
+            section = "removed";
+          } else if (section && sectionLine.length > 0) {
+            const cleanLine = sectionLine.replace(/^[+-]\s*/, "");
+            const nameMatch = cleanLine.match(/^([a-zA-Z][a-zA-Z0-9_]*)\s+:/);
+            if (nameMatch) {
+              const itemName = nameMatch[1];
+              if (section === "changed") {
+                if (!mc.changed.includes(itemName)) {
+                  mc.changed.push(itemName);
+                }
+              } else {
+                if (!mc[section].includes(itemName)) {
+                  mc[section].push(itemName);
+                }
+              }
+            }
+          }
+          i++;
+        }
+        diff.changedModules.push(mc);
+      } else {
+        i++;
+      }
+    } else {
+      i++;
     }
   }
 
-  for (const baseItem of baseItems) {
-    if (!headByName.has(getName(baseItem))) {
-      removed.push(getName(baseItem));
-    }
-  }
-}
-
-function jsonEq(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return diff;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -277,61 +248,43 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-// Fetch published docs.json from the Elm registry and compute diff against current docs.
-// Returns null if the package isn't published, this is a historical commit, or fetching fails.
-async function computeDiffFromRegistry(
-  workDir: string,
-  currentDocs: DocsModule[]
-): Promise<ApiDiff | null> {
+async function shouldRunDiff(workDir: string): Promise<boolean> {
   try {
     const elmJson = JSON.parse(
       fs.readFileSync(path.join(workDir, "elm.json"), "utf-8")
     );
 
-    // Applications don't have published versions
-    if (elmJson.type !== "package") return null;
+    // Applications don't have published versions — elm diff will fail on its own
+    if (elmJson.type !== "package") return true;
 
     const name: string = elmJson.name;
     const version: string = elmJson.version;
 
     // Fetch published releases from the Elm package registry
-    const releasesRes = await fetch(
+    const res = await fetch(
       `https://package.elm-lang.org/packages/${name}/releases.json`,
       { headers: { "User-Agent": "elm-docs-server" } }
     );
 
-    if (!releasesRes.ok) {
-      // Package never published
-      return null;
+    if (!res.ok) {
+      // Package never published — diff is meaningful
+      return true;
     }
 
-    const releases = (await releasesRes.json()) as Record<string, number>;
+    const releases = (await res.json()) as Record<string, number>;
     const publishedVersions = Object.keys(releases);
 
-    if (publishedVersions.length === 0) return null;
+    if (publishedVersions.length === 0) return true;
 
     const latest = publishedVersions.sort(compareVersions).pop()!;
 
     // If elm.json version is behind the latest published version,
-    // this is a historical commit — skip diff to avoid confusing reverse results.
-    if (compareVersions(version, latest) < 0) {
-      return null;
-    }
-
-    // Fetch the published docs.json for the latest version
-    const docsRes = await fetch(
-      `https://package.elm-lang.org/packages/${name}/${latest}/docs.json`,
-      { headers: { "User-Agent": "elm-docs-server" } }
-    );
-
-    if (!docsRes.ok) {
-      return null;
-    }
-
-    const publishedDocs = (await docsRes.json()) as DocsModule[];
-    return computeDiff(publishedDocs, currentDocs);
+    // this is a historical commit — the diff would compare against a
+    // newer release and produce confusing "reverse" results.
+    return compareVersions(version, latest) >= 0;
   } catch {
-    return null;
+    // If anything fails, let elm diff run and handle errors itself
+    return true;
   }
 }
 
@@ -354,6 +307,36 @@ async function lookupPullRequest(
     const pulls = (await res.json()) as Array<{ html_url: string }>;
     return pulls.length > 0 ? pulls[0].html_url : null;
   } catch {
+    return null;
+  }
+}
+
+function buildDiff(workDir: string): ApiDiff | null {
+  try {
+    const elm = elmBinPath();
+
+    fs.mkdirSync(ELM_HOME, { recursive: true });
+
+    const result = spawnSync(elm, ["diff"], {
+      cwd: workDir,
+      env: { ...process.env, ELM_HOME },
+      timeout: 45000,
+    });
+
+    if (result.error) {
+      console.error(`elm diff error: ${result.error.message}`);
+      return null;
+    }
+
+    if (result.status !== 0) {
+      const stderr = result.stderr?.toString() || "";
+      console.error(`elm diff failed (exit ${result.status}): ${stderr}`);
+      return null;
+    }
+
+    return parseDiffOutput(result.stdout.toString());
+  } catch (err) {
+    console.error(`elm diff exception: ${err}`);
     return null;
   }
 }
@@ -388,22 +371,28 @@ export default async function handler(
     const { sha, workDir } = await fetchSource(owner, repo, ref);
     console.log(`Source ready for ${owner}/${repo}@${sha}`);
 
-    // Step 3: Build docs (spawnSync blocks event loop ~400-800ms)
+    // Step 3: Fire shouldRunDiff (needs workDir) — its network fetch overlaps with buildDocs
+    const diffCheckPromise = shouldRunDiff(workDir);
+
+    // Step 4: Build docs (spawnSync blocks event loop ~400-800ms; network responses arrive during this)
     const docs = buildDocs(workDir);
     console.log(`Docs built successfully`);
 
-    // Step 4: Read README.md from the repo (best-effort)
+    // Step 5: Read README.md from the repo (best-effort)
     const readmePath = path.join(workDir, "README.md");
     const readme = fs.existsSync(readmePath)
       ? fs.readFileSync(readmePath, "utf-8")
       : null;
 
-    // Step 5: Compute diff by fetching published docs.json from the Elm registry
-    // and comparing against the just-built docs.
-    const diff = await computeDiffFromRegistry(workDir, docs as DocsModule[]);
-    console.log(`Diff: ${diff ? diff.magnitude : "none"}`);
+    // Step 6: Await shouldRunDiff, conditionally build diff
+    // Skip diff for historical commits where a newer version is already published,
+    // since elm diff compares against the latest published version and would
+    // produce confusing reverse results.
+    const runDiff = await diffCheckPromise;
+    const diff = runDiff ? buildDiff(workDir) : null;
+    console.log(`Diff: ${runDiff ? (diff ? diff.magnitude : "no changes") : "skipped (historical commit)"}`);
 
-    // Step 6: Await PR lookup
+    // Step 7: Await PR lookup
     const pullRequestUrl = await prPromise;
     console.log(`PR: ${pullRequestUrl || "none"}`);
 
