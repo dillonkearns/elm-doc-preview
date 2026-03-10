@@ -15,6 +15,12 @@
   status = 200
   force = true
 
+[[redirects]]
+  from = "/repos/:owner/:repo/compare/:base/:head/compare.json"
+  to = "https://elm-docs.vercel.app/:owner/:repo/compare/:base/:head/compare.json"
+  status = 200
+  force = true
+
 # API: proxy package data to Elm registry
 [[redirects]]
   from = "/packages/:author/:project/releases.json"
