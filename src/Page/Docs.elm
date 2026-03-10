@@ -743,16 +743,45 @@ viewPullRequestLink maybePrUrl =
 
 
 viewFilteredDiffAddedModules : Model -> String -> List String -> List (Html Msg)
-viewFilteredDiffAddedModules model query modules =
+viewFilteredDiffAddedModules model query moduleNames =
     let
-        filtered =
-            if String.isEmpty query then
-                modules
-
-            else
-                List.filter (\name -> String.contains query (String.toLower name)) modules
+        results =
+            List.concatMap (viewFilteredDiffAddedModule model query) moduleNames
     in
-    viewDiffAddedModules model filtered
+    if List.isEmpty results then
+        []
+
+    else
+        h3 [ class "diff-section-title diff-section-title-added" ] [ text "Added Modules" ]
+            :: results
+
+
+viewFilteredDiffAddedModule : Model -> String -> String -> List (Html Msg)
+viewFilteredDiffAddedModule model query moduleName =
+    let
+        items =
+            getModuleItemNames model moduleName
+    in
+    if String.isEmpty query then
+        viewDiffAddedModuleItems model moduleName items
+
+    else
+        let
+            nameMatches =
+                String.contains query (String.toLower moduleName)
+
+            filteredItems =
+                if nameMatches then
+                    items
+
+                else
+                    List.filter (\name -> String.contains query (String.toLower name)) items
+        in
+        if nameMatches || not (List.isEmpty filteredItems) then
+            viewDiffAddedModuleItems model moduleName filteredItems
+
+        else
+            []
 
 
 viewFilteredDiffRemovedModules : String -> List String -> List (Html msg)
@@ -805,24 +834,32 @@ filterChangedModule query mc =
     }
 
 
-viewDiffAddedModules : Model -> List String -> List (Html Msg)
-viewDiffAddedModules model modules =
-    if List.isEmpty modules then
-        []
-
-    else
-        [ h3 [ class "diff-section-title diff-section-title-added" ] [ text "Added Modules" ]
-        , ul []
-            (List.map
-                (\name ->
-                    li [ class "diff-item" ]
-                        [ viewModuleLink model name
-                        , span [ class "diff-status-dot diff-status-dot-added" ] []
-                        ]
-                )
-                modules
-            )
+viewDiffAddedModuleItems : Model -> String -> List String -> List (Html Msg)
+viewDiffAddedModuleItems model moduleName items =
+    [ h3 [ class "diff-section-title" ]
+        [ viewModuleLink model moduleName
+        , span [ class "diff-status-dot diff-status-dot-added" ] []
         ]
+    ]
+        ++ viewDiffItemList model moduleName "diff-status-dot-added" items
+
+
+getModuleItemNames : Model -> String -> List String
+getModuleItemNames model moduleName =
+    case model.docs of
+        Success (Modules docsList) ->
+            case findModule moduleName docsList of
+                Just mod ->
+                    List.map .name mod.unions
+                        ++ List.map .name mod.aliases
+                        ++ List.map .name mod.values
+                        ++ List.map .name mod.binops
+
+                Nothing ->
+                    []
+
+        _ ->
+            []
 
 
 viewDiffRemovedModules : List String -> List (Html msg)
