@@ -328,7 +328,7 @@ update msg model =
                                     Success rm
 
                                 Nothing ->
-                                    Failure
+                                    Success ""
                         , diffData = response.diff
                         , diffMode = response.diff /= Nothing
                         , pullRequestUrl = response.pullRequestUrl
