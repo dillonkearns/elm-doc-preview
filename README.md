@@ -214,8 +214,7 @@ similar to GitHub's compare view:
 ```
 
 Examples:
-- [elm-css `2.0.0` vs `3.0.0`](https://elm-doc-preview-with-diff.netlify.app/repos/rtfeldman/elm-css/compare/2.0.0...3.0.0/)
-- [elm-ui `1.0.0` vs `master`](https://elm-doc-preview-with-diff.netlify.app/repos/mdgriffith/elm-ui/compare/1.0.0...master/)
+- [elm-ui `1.1.8` vs `2.0`](https://elm-doc-preview-with-diff.netlify.app/repos/mdgriffith/elm-ui/compare/1.1.8...2.0/)
 
 The diff sidebar shows the magnitude of the change (MAJOR, MINOR, or PATCH)
 along with added, removed, and changed items. Individual items in the docs
