@@ -397,6 +397,10 @@ stepUrl url model =
                     (\author project version focus ->
                         stepDocs model (Docs.init session author project version focus)
                     )
+                , route (s "repos" </> author_ </> project_ </> s "compare" </> compareRef_ </> focus_)
+                    (\owner repo ( base, head ) focus ->
+                        stepDocs model (Docs.initCompare session owner repo base head focus)
+                    )
                 , route (s "repos" </> author_ </> project_ </> ref_ </> focus_)
                     (\owner repo ref focus ->
                         let
@@ -451,6 +455,22 @@ version_ =
 ref_ : Parser (String -> a) a
 ref_ =
     custom "REF" Just
+
+
+compareRef_ : Parser (( String, String ) -> a) a
+compareRef_ =
+    custom "COMPARE_REF" <|
+        \segment ->
+            case String.split "..." segment of
+                [ base, head ] ->
+                    if not (String.isEmpty base) && not (String.isEmpty head) then
+                        Just ( base, head )
+
+                    else
+                        Nothing
+
+                _ ->
+                    Nothing
 
 
 focus_ : Parser (Docs.Focus -> a) a

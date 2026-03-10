@@ -1,9 +1,9 @@
 module Session exposing
     ( Data, Docs(..), Preview, RepoDocsResponse, empty
     , addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
-    , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
-    , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
-    , addRepoDocs
+    , fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs, fetchCompareDocs
+    , getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs, getCompareDocs
+    , addRepoDocs, addCompareDocs
     , docsDecoder
     )
 
@@ -11,9 +11,9 @@ module Session exposing
 
 @docs Data, Docs, Preview, RepoDocsResponse, empty
 @docs addDocs, addEntries, addManifest, addReadme, addReleases, addPreview, addDiff
-@docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs
-@docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs
-@docs addRepoDocs
+@docs fetchDocs, fetchManifest, fetchReadme, fetchReleases, fetchPreview, fetchRepoDocs, fetchCompareDocs
+@docs getDocs, getEntries, getManifest, getReadme, getReleases, getPreview, getDiff, getRepoDocs, getCompareDocs
+@docs addRepoDocs, addCompareDocs
 @docs docsDecoder
 
 -}
@@ -332,3 +332,38 @@ getDiff data =
 addDiff : Maybe ApiDiff -> Data -> Data
 addDiff maybeDiff data =
     { data | diff = maybeDiff }
+
+
+
+-- COMPARE DOCS
+
+
+{-| -}
+toCompareKey : String -> String -> String -> String -> String
+toCompareKey owner repo base head =
+    "compare:" ++ owner ++ "/" ++ repo ++ "@" ++ base ++ "..." ++ head
+
+
+{-| -}
+getCompareDocs : Data -> String -> String -> String -> String -> Maybe Docs
+getCompareDocs data owner repo base head =
+    Dict.get (toCompareKey owner repo base head) data.docs
+
+
+{-| -}
+addCompareDocs : String -> String -> String -> String -> RepoDocsResponse -> Data -> Data
+addCompareDocs owner repo base head response data =
+    let
+        newDocs =
+            Dict.insert (toCompareKey owner repo base head) response.docs data.docs
+    in
+    { data | docs = newDocs, diff = response.diff }
+
+
+{-| -}
+fetchCompareDocs : (Result Http.Error RepoDocsResponse -> msg) -> String -> String -> String -> String -> Cmd msg
+fetchCompareDocs toMsg owner repo base head =
+    Http.get
+        { url = Url.absolute [ "repos", owner, repo, "compare", base, head, "compare.json" ] []
+        , expect = Http.expectJson toMsg repoDocsResponseDecoder
+        }

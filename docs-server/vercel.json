@@ -8,6 +8,10 @@
     {
       "source": "/:owner/:repo/:ref/preview.json",
       "destination": "/api/preview?owner=:owner&repo=:repo&ref=:ref"
+    },
+    {
+      "source": "/:owner/:repo/compare/:base/:head/compare.json",
+      "destination": "/api/compare?owner=:owner&repo=:repo&base=:base&head=:head"
     }
   ],
   "functions": {
@@ -19,6 +23,11 @@
     "api/preview.ts": {
       "includeFiles": "{node_modules/elm,elm-home-seed}/**",
       "maxDuration": 60,
+      "memory": 1024
+    },
+    "api/compare.ts": {
+      "includeFiles": "{node_modules/elm,elm-home-seed}/**",
+      "maxDuration": 90,
       "memory": 1024
     }
   },
@@ -32,6 +41,13 @@
     },
     {
       "source": "/(.*)/preview.json",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" }
+      ]
+    },
+    {
+      "source": "/(.*)/compare.json",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" }

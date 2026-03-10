@@ -1,6 +1,6 @@
 module Page.Docs exposing
     ( Focus(..), Model, Msg
-    , init, initRepo, update, view
+    , init, initRepo, initCompare, update, view
     , toTitle
     , updateReadme, updateDocs, updateManifest, updateDiff
     )
@@ -8,7 +8,7 @@ module Page.Docs exposing
 {-|
 
 @docs Focus, Model, Msg
-@docs init, initRepo, update, view
+@docs init, initRepo, initCompare, update, view
 @docs toTitle
 @docs updateReadme, updateDocs, updateManifest, updateDiff
 
@@ -63,6 +63,7 @@ type alias Model =
     , diffData : Maybe ApiDiff
     , diffMode : Bool
     , pullRequestUrl : Maybe String
+    , compare : Maybe { base : String, head : String }
     }
 
 
@@ -96,10 +97,10 @@ init session author project version focus =
                     Release.getLatest releases
             in
             getInfo latest <|
-                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing
+                Model session author project version Nothing focus "" (Success latest) Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing Nothing
 
         Nothing ->
-            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing
+            ( Model session author project version Nothing focus "" Loading Loading Loading Loading restoredDiff (restoredDiff /= Nothing) Nothing Nothing
             , Session.fetchReleases GotReleases author project
             )
 
@@ -121,13 +122,32 @@ initRepo session maybeDiffMode owner repo ref focus =
     in
     case Session.getRepoDocs session owner repo ref of
         Just docs ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff diffMode Nothing
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading (Success docs) Loading restoredDiff diffMode Nothing Nothing
             , scrollIfNeeded focus
             )
 
         Nothing ->
-            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False Nothing
+            ( Model session owner repo Nothing (Just ref) focus "" Loading Loading Loading Loading Nothing False Nothing Nothing
             , Session.fetchRepoDocs GotRepoDocs owner repo ref
+            )
+
+
+{-| -}
+initCompare : Session.Data -> String -> String -> String -> String -> Focus -> ( Model, Cmd Msg )
+initCompare session owner repo base head focus =
+    let
+        compareInfo =
+            Just { base = base, head = head }
+    in
+    case Session.getCompareDocs session owner repo base head of
+        Just docs ->
+            ( Model session owner repo Nothing (Just head) focus "" Loading Loading (Success docs) Loading (Session.getDiff session) True Nothing compareInfo
+            , scrollIfNeeded focus
+            )
+
+        Nothing ->
+            ( Model session owner repo Nothing (Just head) focus "" Loading Loading Loading Loading Nothing True Nothing compareInfo
+            , Session.fetchCompareDocs GotCompareDocs owner repo base head
             )
 
 
@@ -202,6 +222,7 @@ type Msg
     | GotDocs Version (Result Http.Error Docs)
     | GotManifest Version (Result Http.Error Project)
     | GotRepoDocs (Result Http.Error Session.RepoDocsResponse)
+    | GotCompareDocs (Result Http.Error Session.RepoDocsResponse)
 
 
 {-| -}
@@ -324,6 +345,34 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
+        GotCompareDocs result ->
+            case ( result, model.compare ) of
+                ( Ok response, Just { base, head } ) ->
+                    ( { model
+                        | docs = Success response.docs
+                        , readme =
+                            case response.readme of
+                                Just rm ->
+                                    Success rm
+
+                                Nothing ->
+                                    Failure
+                        , diffData = response.diff
+                        , diffMode = True
+                        , pullRequestUrl = response.pullRequestUrl
+                        , session = Session.addCompareDocs model.author model.project base head response model.session
+                      }
+                    , scrollIfNeeded model.focus
+                    )
+
+                ( Err _, _ ) ->
+                    ( { model | docs = Failure, readme = Failure }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- EXTERNAL UPDATES
@@ -416,17 +465,22 @@ toTitle model =
 
 toGenericTitle : Model -> String
 toGenericTitle model =
-    case model.ref of
-        Just ref ->
-            model.author ++ "/" ++ model.project ++ " (" ++ ref ++ ")"
+    case model.compare of
+        Just { base, head } ->
+            model.author ++ "/" ++ model.project ++ " (" ++ base ++ "..." ++ head ++ ")"
 
         Nothing ->
-            case getVersion model of
-                Just version ->
-                    model.project ++ " " ++ Version.toString version
+            case model.ref of
+                Just ref ->
+                    model.author ++ "/" ++ model.project ++ " (" ++ ref ++ ")"
 
                 Nothing ->
-                    model.project
+                    case getVersion model of
+                        Just version ->
+                            model.project ++ " " ++ Version.toString version
+
+                        Nothing ->
+                            model.project
 
 
 getVersion : Model -> Maybe Version
@@ -453,18 +507,26 @@ getVersion model =
 
 toHeader : Model -> List Skeleton.Segment
 toHeader model =
-    case model.ref of
-        Just ref ->
+    case model.compare of
+        Just { base, head } ->
             [ Skeleton.Text model.author
-            , Skeleton.Link (Href.toRepoVersion model.author model.project ref Nothing) model.project
-            , Skeleton.Text ref
+            , Skeleton.Link (Href.toCompareVersion model.author model.project base head Nothing) model.project
+            , Skeleton.Text (base ++ "..." ++ head)
             ]
 
         Nothing ->
-            [ Skeleton.authorSegment model.author
-            , Skeleton.projectSegment model.author model.project
-            , Skeleton.versionSegment model.author model.project (getVersion model)
-            ]
+            case model.ref of
+                Just ref ->
+                    [ Skeleton.Text model.author
+                    , Skeleton.Link (Href.toRepoVersion model.author model.project ref Nothing) model.project
+                    , Skeleton.Text ref
+                    ]
+
+                Nothing ->
+                    [ Skeleton.authorSegment model.author
+                    , Skeleton.projectSegment model.author model.project
+                    , Skeleton.versionSegment model.author model.project (getVersion model)
+                    ]
 
 
 
@@ -630,7 +692,7 @@ viewSidebar model =
 
 viewNormalSidebar : Model -> List (Html Msg)
 viewNormalSidebar model =
-    [ viewReadmeLink model.author model.project model.version model.ref model.focus
+    [ viewReadmeLink model
     , br [] []
     , case model.ref of
         Just ref ->
@@ -899,12 +961,17 @@ viewDiffItemList model moduleName dotClass items =
     else
         let
             toModuleHref itemName =
-                case model.ref of
-                    Just ref ->
-                        Href.toRepoModule model.author model.project ref moduleName (Just itemName)
+                case model.compare of
+                    Just { base, head } ->
+                        Href.toCompareModule model.author model.project base head moduleName (Just itemName)
 
                     Nothing ->
-                        Href.toModule model.author model.project model.version moduleName (Just itemName)
+                        case model.ref of
+                            Just ref ->
+                                Href.toRepoModule model.author model.project ref moduleName (Just itemName)
+
+                            Nothing ->
+                                Href.toModule model.author model.project model.version moduleName (Just itemName)
         in
         [ ul []
             (List.map
@@ -1031,19 +1098,24 @@ isTagMatch query toResult tipeName ( tagName, _ ) =
 -- VIEW "README" LINK
 
 
-viewReadmeLink : String -> String -> Maybe Version -> Maybe String -> Focus -> Html msg
-viewReadmeLink author project version ref focus =
+viewReadmeLink : Model -> Html msg
+viewReadmeLink model =
     let
         url =
-            case ref of
-                Just r ->
-                    Href.toRepoVersion author project r Nothing
+            case model.compare of
+                Just { base, head } ->
+                    Href.toCompareVersion model.author model.project base head Nothing
 
                 Nothing ->
-                    Href.toVersion author project version Nothing
+                    case model.ref of
+                        Just r ->
+                            Href.toRepoVersion model.author model.project r Nothing
+
+                        Nothing ->
+                            Href.toVersion model.author model.project model.version Nothing
     in
     navLink "README" url <|
-        case focus of
+        case model.focus of
             Readme _ ->
                 True
 
@@ -1092,12 +1164,17 @@ viewModuleLink : Model -> String -> Html msg
 viewModuleLink model name =
     let
         url =
-            case model.ref of
-                Just ref ->
-                    Href.toRepoModule model.author model.project ref name Nothing
+            case model.compare of
+                Just { base, head } ->
+                    Href.toCompareModule model.author model.project base head name Nothing
 
                 Nothing ->
-                    Href.toModule model.author model.project model.version name Nothing
+                    case model.ref of
+                        Just ref ->
+                            Href.toRepoModule model.author model.project ref name Nothing
+
+                        Nothing ->
+                            Href.toModule model.author model.project model.version name Nothing
     in
     navLink name url <|
         case model.focus of
@@ -1112,12 +1189,17 @@ viewValueItem : Model -> String -> String -> String -> Html msg
 viewValueItem model moduleName ownerName valueName =
     let
         url =
-            case model.ref of
-                Just ref ->
-                    Href.toRepoModule model.author model.project ref moduleName (Just ownerName)
+            case model.compare of
+                Just { base, head } ->
+                    Href.toCompareModule model.author model.project base head moduleName (Just ownerName)
 
                 Nothing ->
-                    Href.toModule model.author model.project model.version moduleName (Just ownerName)
+                    case model.ref of
+                        Just ref ->
+                            Href.toRepoModule model.author model.project ref moduleName (Just ownerName)
+
+                        Nothing ->
+                            Href.toModule model.author model.project model.version moduleName (Just ownerName)
     in
     li [ class "pkg-nav-value" ] [ navLink valueName url False ]
 

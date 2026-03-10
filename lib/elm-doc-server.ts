@@ -15,6 +15,7 @@ import chokidar from "chokidar";
 import open from "open";
 import { fileURLToPath } from "url";
 import { version } from "./version.js";
+import { computeDiff } from "./compute-diff.js";
 
 import util from "util";
 const readFileAsync = util.promisify(fs.readFile);
@@ -860,6 +861,33 @@ class DocServer {
       serveIndex(this.elmCache, { icons: true })
     );
 
+    // compare endpoint: build docs for two git refs and diff them
+    this.app.get(
+      "/repos/:owner/:repo/compare/:base/:head/compare.json",
+      async (req, res) => {
+        const { base, head } = req.params;
+        try {
+          const [baseDocs, headDocs, readme] = await this.buildCompareDocs(
+            base,
+            head
+          );
+          info(`  |> base docs: ${Array.isArray(baseDocs) ? (baseDocs as any[]).length + " modules" : typeof baseDocs}`);
+          info(`  |> head docs: ${Array.isArray(headDocs) ? (headDocs as any[]).length + " modules" : typeof headDocs}`);
+          const diff = computeDiff(baseDocs as any[], headDocs as any[]) ?? {
+            magnitude: "PATCH",
+            addedModules: [],
+            removedModules: [],
+            changedModules: [],
+          };
+          info(`  |> diff: ${diff.magnitude} (added=${diff.addedModules.length}, removed=${diff.removedModules.length}, changed=${diff.changedModules.length})`);
+          res.json({ docs: headDocs, diff, pullRequestUrl: null, readme });
+        } catch (err: any) {
+          error("Compare failed:", err.message || err);
+          res.status(500).json({ error: err.message || String(err) });
+        }
+      }
+    );
+
     // default route
     this.app.get("*", (_req, res) => {
       res.sendFile(path.join(dirname, "../static/index.html"));
@@ -1006,6 +1034,121 @@ class DocServer {
           diff: diff,
         },
       });
+    }
+  }
+
+  private resolveElmPath(): string {
+    // Resolve elm binary to an absolute path so it works from any cwd
+    const localElm = path.resolve(
+      this.options.dir,
+      "node_modules",
+      ".bin",
+      "elm"
+    );
+    if (fs.existsSync(localElm)) return fs.realpathSync(localElm);
+
+    const which = spawn.sync("which", ["elm"]);
+    if (which.status === 0) return which.stdout.toString().trim();
+
+    throw new Error("Cannot resolve elm binary path");
+  }
+
+  private async buildCompareDocs(
+    baseRef: string,
+    headRef: string
+  ): Promise<[Output, Output, string | null]> {
+    const repoRoot = this.options.dir;
+    const elmPath = this.resolveElmPath();
+    const worktreeElm: Elm = (args, cwd = ".") =>
+      spawn.sync(elmPath, args, { cwd });
+
+    // git worktree add requires the target path to not exist yet,
+    // so we generate unique temp paths without creating directories.
+    const baseWorktree = path.join(
+      os.tmpdir(),
+      `elm-doc-compare-base-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const worktrees: string[] = [];
+
+    try {
+      // Set up git worktree for base ref
+      const addResult = spawn.sync(
+        "git",
+        ["worktree", "add", "--detach", baseWorktree, baseRef],
+        { cwd: repoRoot }
+      );
+      if (addResult.status !== 0) {
+        const stderr = addResult.stderr?.toString() || "";
+        throw new Error(
+          `Failed to create worktree for '${baseRef}': ${stderr}`
+        );
+      }
+      worktrees.push(baseWorktree);
+
+      // Build docs for base ref
+      const baseManifest = getManifestSync(
+        path.join(baseWorktree, "elm.json")
+      );
+      if (!baseManifest) {
+        throw new Error(`No elm.json found at ref '${baseRef}'`);
+      }
+      info(`  |> building base docs for ${baseRef}`);
+      const baseDocs = buildDocs(baseManifest, baseWorktree, worktreeElm);
+
+      // Build docs for head ref (current working directory for "HEAD" or another worktree)
+      let headDocs: Output;
+      let headReadme: string | null = null;
+
+      if (headRef === "HEAD" || headRef === "working") {
+        // Use current working directory
+        if (!this.manifest) {
+          throw new Error("No elm.json found in current directory");
+        }
+        info(`  |> building head docs from working directory`);
+        headDocs = buildDocs(this.manifest, repoRoot, worktreeElm);
+        const readmePath = path.join(repoRoot, "README.md");
+        headReadme = fs.existsSync(readmePath)
+          ? fs.readFileSync(readmePath, "utf-8")
+          : null;
+      } else {
+        const headWorktree = path.join(
+          os.tmpdir(),
+          `elm-doc-compare-head-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        );
+        const headAddResult = spawn.sync(
+          "git",
+          ["worktree", "add", "--detach", headWorktree, headRef],
+          { cwd: repoRoot }
+        );
+        if (headAddResult.status !== 0) {
+          const stderr = headAddResult.stderr?.toString() || "";
+          throw new Error(
+            `Failed to create worktree for '${headRef}': ${stderr}`
+          );
+        }
+        worktrees.push(headWorktree);
+
+        const headManifest = getManifestSync(
+          path.join(headWorktree, "elm.json")
+        );
+        if (!headManifest) {
+          throw new Error(`No elm.json found at ref '${headRef}'`);
+        }
+        info(`  |> building head docs for ${headRef}`);
+        headDocs = buildDocs(headManifest, headWorktree, worktreeElm);
+        const readmePath = path.join(headWorktree, "README.md");
+        headReadme = fs.existsSync(readmePath)
+          ? fs.readFileSync(readmePath, "utf-8")
+          : null;
+      }
+
+      return [baseDocs, headDocs, headReadme];
+    } finally {
+      for (const wt of worktrees) {
+        spawn.sync("git", ["worktree", "remove", "--force", wt], {
+          cwd: repoRoot,
+        });
+      }
     }
   }
 
