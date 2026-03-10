@@ -11,11 +11,12 @@ any surprise when releasing a package.
 
 - **Packages** and **Applications** support with **documentation hot reloading**
 - **Offline cached packages documentation server**
+- **API diff viewer** comparing any two git refs (branches, tags, commits)
 - Source and documentation compilation errors display
-- Online documentation sharing for reviews (using the
+- Online documentation sharing and review (using the
  [online version](#online-version))
 
-![elm-doc-preview](https://github.com/dmy/elm-doc-preview/raw/d3d19a2/screenshots/elm-doc-preview.png)
+![elm-doc-preview](https://github.com/dillonkearns/elm-doc-preview/raw/d3d19a2/screenshots/elm-doc-preview.png)
 
 # Installation
 
@@ -96,7 +97,7 @@ documented modules (**exposed-modules**) and to customize the application
 forbidden in packages. This means that ports will appear as normal functions in
 the documentation. Also currently, this requires ports declarations to be on
 one line, if this is an issue for you, please
-[open an issue](https://github.com/dmy/elm-doc-preview/issues).
+[open an issue](https://github.com/dillonkearns/elm-doc-preview/issues).
 
 Without an `elm-application.json` file, `elm-doc-preview` will show an
 application as `my/application 1.0.0` and will report an error about
@@ -107,7 +108,7 @@ local packages included in the application `source-directories`.
 an `exposed-modules` value.**
 
 For example, here is the
-[elm-application.json](https://github.com/dmy/elm-doc-preview/blob/master/elm-application.json)
+[elm-application.json](https://github.com/dillonkearns/elm-doc-preview/blob/master/elm-application.json)
 file for the `elm-doc-preview` Elm application followed by a description of
 each field:
 
@@ -176,12 +177,63 @@ in `elm.json` `source-directories`.
 
 # Online version
 
-There is also an online version supporting documentations loading from github
-to share them for online reviews:
+There is also an online version that can load documentation directly from
+GitHub repositories for sharing and review:
 
-https://elm-doc-preview.netlify.app
+https://elm-doc-preview-with-diff.netlify.app
 
 It does not support hot-reloading or dependencies documentation though.
+
+## URL schemes
+
+### Browse a branch or commit
+
+View docs for any git ref (branch, tag, or commit SHA):
+
+```
+/repos/{owner}/{repo}/{ref}
+/repos/{owner}/{repo}/{ref}/{Module-Name}
+```
+
+Examples:
+- [elm-pages `main` branch](https://elm-doc-preview-with-diff.netlify.app/repos/dillonkearns/elm-pages/main/)
+- [elm-pages `BackendTask` module](https://elm-doc-preview-with-diff.netlify.app/repos/dillonkearns/elm-pages/main/BackendTask)
+
+When viewing a branch that has changes compared to the latest published
+version, a **Diff** tab appears in the sidebar showing added, changed, and
+removed modules and items.
+
+### Compare two refs
+
+Compare the API surface between any two git refs (branches, tags, or SHAs),
+similar to GitHub's compare view:
+
+```
+/repos/{owner}/{repo}/compare/{base}...{head}
+/repos/{owner}/{repo}/compare/{base}...{head}/{Module-Name}
+```
+
+Examples:
+- [elm-css `2.0.0` vs `3.0.0`](https://elm-doc-preview-with-diff.netlify.app/repos/rtfeldman/elm-css/compare/2.0.0...3.0.0/)
+- [elm-ui `1.0.0` vs `master`](https://elm-doc-preview-with-diff.netlify.app/repos/mdgriffith/elm-ui/compare/1.0.0...master/)
+
+The diff sidebar shows the magnitude of the change (MAJOR, MINOR, or PATCH)
+along with added, removed, and changed items. Individual items in the docs
+are highlighted to indicate their diff status.
+
+### Local compare
+
+When running `elm-doc-preview` locally, you can compare any two git refs in
+your repository by navigating to:
+
+```
+http://localhost:8000/repos/{owner}/{repo}/compare/{base}...{head}
+```
+
+For example, to see what changed since the last release tag:
+```
+http://localhost:8000/repos/my/package/compare/1.0.0...HEAD
+```
 
 # API
 ```javascript
