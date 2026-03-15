@@ -557,7 +557,7 @@ orderedList startIndex items =
 
 codeBlock : { body : String, language : Maybe String } -> String
 codeBlock { body, language } =
-    highlightCode (language |> Maybe.withDefault "elm") body
+    highlightCode "  " (language |> Maybe.withDefault "elm") body
 
 
 thematicBreak : String
@@ -569,8 +569,8 @@ thematicBreak =
 -- SYNTAX HIGHLIGHTING
 
 
-highlightCode : String -> String -> String
-highlightCode language body =
+highlightCode : String -> String -> String -> String
+highlightCode indent language body =
     let
         trimmedBody =
             String.trimRight body
@@ -622,7 +622,7 @@ highlightCode language body =
         fallback =
             trimmedBody
                 |> String.lines
-                |> List.map (\line -> "    " ++ Ansi.Color.fontColor Ansi.Color.yellow line)
+                |> List.map (\line -> indent ++ Ansi.Color.fontColor Ansi.Color.yellow line)
                 |> String.join "\n"
                 |> (\s -> s ++ "\n")
     in
@@ -632,7 +632,7 @@ highlightCode language body =
                 Ok hcode ->
                     hcode
                         |> SyntaxHighlight.toConsole consoleOptions
-                        |> List.map (\line -> "    " ++ String.replace "\n" "" line)
+                        |> List.map (\line -> indent ++ String.replace "\n" "" line)
                         |> String.join "\n"
                         |> (\s -> s ++ "\n")
 
