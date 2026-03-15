@@ -267,9 +267,13 @@ renderValue { name, comment, tipe } =
                         |> (\typeStr -> "  " ++ Ansi.Font.bold name ++ " :\n" ++ typeStr)
 
         body =
-            indentComment comment
+            if String.isEmpty (String.trim comment) then
+                ""
+
+            else
+                "\n\n" ++ indentComment comment
     in
-    header ++ "\n\n" ++ body
+    header ++ body
 
 
 
@@ -304,9 +308,13 @@ renderUnion { name, comment, args, tags } =
                         ++ String.concat (List.map (\t -> "\n      | " ++ renderTag t) rest)
 
         body =
-            indentComment comment
+            if String.isEmpty (String.trim comment) then
+                ""
+
+            else
+                "\n\n" ++ indentComment comment
     in
-    header ++ constructors ++ "\n\n" ++ body
+    header ++ constructors ++ body
 
 
 renderTag : ( String, List Type.Type ) -> String
@@ -350,9 +358,13 @@ renderAlias { name, comment, args, tipe } =
                         |> String.join "\n"
 
         body =
-            indentComment comment
+            if String.isEmpty (String.trim comment) then
+                ""
+
+            else
+                "\n\n" ++ indentComment comment
     in
-    header ++ "\n" ++ typeBody ++ "\n\n" ++ body
+    header ++ "\n" ++ typeBody ++ body
 
 
 
@@ -396,9 +408,13 @@ renderBinop { name, comment, tipe, associativity, precedence } =
             "    " ++ assocStr ++ "-associative, precedence " ++ String.fromInt precedence
 
         body =
-            indentComment comment
+            if String.isEmpty (String.trim comment) then
+                ""
+
+            else
+                "\n\n" ++ indentComment comment
     in
-    header ++ "\n" ++ info ++ "\n\n" ++ body
+    header ++ "\n" ++ info ++ body
 
 
 
