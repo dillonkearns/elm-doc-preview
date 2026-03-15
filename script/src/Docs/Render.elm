@@ -20,6 +20,8 @@ import Ansi.Font
 import Docs.Block as Block
 import Docs.Diff as Diff exposing (ApiDiff, DiffStatus(..), ModuleStatus(..))
 import Elm.Docs as Docs
+import Elm.Type
+import Json.Decode as Decode
 import Elm.Type as Type
 import Markdown.Block exposing (ListItem(..), Task(..))
 import Markdown.Html
@@ -687,6 +689,14 @@ renderBlockWithDiff diff moduleName status block =
         rendered =
             renderBlock block
 
+        maybeCommentDiff =
+            case blockName block of
+                Just name ->
+                    Diff.getCommentDiff diff moduleName name
+
+                Nothing ->
+                    Nothing
+
         badge =
             case status of
                 Added ->
@@ -699,22 +709,30 @@ renderBlockWithDiff diff moduleName status block =
                     diffBadge Ansi.Color.green "+" ++ " "
 
                 Unchanged ->
-                    ""
-
-        commentDiffSection =
-            case blockName block of
-                Just name ->
-                    case Diff.getCommentDiff diff moduleName name of
-                        Just cdiff ->
-                            "\n\n    " ++ Ansi.Font.bold "Doc changes:" ++ "\n" ++ indentUnifiedDiff cdiff
+                    case maybeCommentDiff of
+                        Just _ ->
+                            diffBadge Ansi.Color.yellow "~" ++ " "
 
                         Nothing ->
                             ""
 
+        oldTypeSection =
+            case ( status, blockName block ) of
+                ( Changed, Just name ) ->
+                    renderOldType diff moduleName name
+
+                _ ->
+                    ""
+
+        commentDiffSection =
+            case maybeCommentDiff of
+                Just cdiff ->
+                    "\n\n    " ++ Ansi.Font.bold "Doc changes:" ++ "\n" ++ indentUnifiedDiff cdiff
+
                 Nothing ->
                     ""
     in
-    badge ++ rendered ++ commentDiffSection
+    badge ++ oldTypeSection ++ rendered ++ commentDiffSection
 
 
 {-| Render a removed item (name only, with red strikethrough).
@@ -729,6 +747,25 @@ renderRemovedItem name =
 diffBadge : Ansi.Color.Color -> String -> String
 diffBadge color symbol =
     Ansi.Font.bold (Ansi.Color.backgroundColor color (Ansi.Color.fontColor Ansi.Color.black (" " ++ symbol ++ " ")))
+
+
+{-| Render the old type signature for a changed item as a struck-through line.
+-}
+renderOldType : ApiDiff -> String -> String -> String
+renderOldType diff moduleName itemName =
+    case Diff.getOldType diff moduleName itemName of
+        Just typeValue ->
+            case Decode.decodeValue Elm.Type.decoder typeValue of
+                Ok tipe ->
+                    Ansi.Color.fontColor Ansi.Color.red
+                        ("  " ++ Ansi.Font.strikeThrough (itemName ++ " : " ++ typeToString tipe))
+                        ++ "\n"
+
+                Err _ ->
+                    ""
+
+        Nothing ->
+            ""
 
 
 {-| Render a unified diff string with colored +/- lines.

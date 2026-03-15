@@ -246,6 +246,8 @@ export async function computeDiff(
   );
 
   const commentDiffs: Record<string, ItemCommentDiffs> = {};
+  // Old type signatures for changed items (JSON-encoded type values)
+  const oldTypes: Record<string, Record<string, unknown>> = {};
 
   for (const mc of apiDiff.changedModules) {
     const baseMod = baseByName.get(mc.name);
@@ -253,6 +255,15 @@ export async function computeDiff(
     if (!baseMod || !headMod) continue;
 
     const modDiffs: ItemCommentDiffs = {};
+
+    // Collect old types for changed items
+    for (const itemName of mc.changed) {
+      const baseType = findItemType(baseMod, itemName);
+      if (baseType !== null) {
+        if (!oldTypes[mc.name]) oldTypes[mc.name] = {};
+        oldTypes[mc.name][itemName] = baseType;
+      }
+    }
 
     // Module-level comment diff
     if (baseMod.comment !== headMod.comment) {
@@ -326,6 +337,7 @@ export async function computeDiff(
     ...apiDiff,
     commentDiffs: Object.keys(commentDiffs).length > 0 ? commentDiffs : undefined,
     readmeDiff: readmeDiff,
+    oldTypes: Object.keys(oldTypes).length > 0 ? oldTypes : undefined,
   };
 }
 
@@ -345,6 +357,13 @@ function findItemComment(mod: DocsModule, itemName: string): string | null {
   for (const u of mod.unions) if (u.name === itemName) return u.comment;
   for (const a of mod.aliases) if (a.name === itemName) return a.comment;
   for (const b of mod.binops) if (b.name === itemName) return b.comment;
+  return null;
+}
+
+function findItemType(mod: DocsModule, itemName: string): unknown | null {
+  for (const v of mod.values) if (v.name === itemName) return v.type;
+  for (const b of mod.binops) if (b.name === itemName) return b.type;
+  // Unions and aliases don't have a simple type string — skip for now
   return null;
 }
 
@@ -397,7 +416,7 @@ function unifiedDiff(
 
   // Mark which lines to include (changed lines + context around them)
   const includeIndices = new Set<number>();
-  for (const idx of changedIndices) {
+  changedIndices.forEach((idx) => {
     for (
       let i = Math.max(0, idx - contextLines);
       i <= Math.min(fullDiff.length - 1, idx + contextLines);
@@ -405,7 +424,7 @@ function unifiedDiff(
     ) {
       includeIndices.add(i);
     }
-  }
+  });
 
   // Build output with ... separators for gaps
   const result: string[] = [];

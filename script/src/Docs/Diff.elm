@@ -7,6 +7,7 @@ module Docs.Diff exposing
     , findModuleChanges
     , getCommentDiff
     , getModuleCommentDiff
+    , getOldType
     , hasCommentChanges
     , lookupItem
     , moduleStatus
@@ -14,6 +15,7 @@ module Docs.Diff exposing
 
 import Dict exposing (Dict)
 import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
 
 
 type alias ApiDiff =
@@ -23,6 +25,7 @@ type alias ApiDiff =
     , changedModules : List ModuleChanges
     , commentDiffs : Dict String (Dict String String)
     , readmeDiff : Maybe String
+    , oldTypes : Dict String (Dict String Encode.Value)
     }
 
 
@@ -55,7 +58,18 @@ decoder =
 
 apiDiffDecoder : Decoder ApiDiff
 apiDiffDecoder =
-    map6 ApiDiff
+    map6
+        (\magnitude addedModules removedModules changedModules commentDiffs readmeDiff ->
+            \oldTypes ->
+                { magnitude = magnitude
+                , addedModules = addedModules
+                , removedModules = removedModules
+                , changedModules = changedModules
+                , commentDiffs = commentDiffs
+                , readmeDiff = readmeDiff
+                , oldTypes = oldTypes
+                }
+        )
         (Decode.field "magnitude" Decode.string)
         (Decode.field "addedModules" (Decode.list Decode.string))
         (Decode.field "removedModules" (Decode.list Decode.string))
@@ -70,6 +84,14 @@ apiDiffDecoder =
             , Decode.succeed Nothing
             ]
         )
+        |> Decode.andThen
+            (\partialFn ->
+                Decode.oneOf
+                    [ Decode.field "oldTypes" (Decode.dict (Decode.dict Decode.value))
+                    , Decode.succeed Dict.empty
+                    ]
+                    |> Decode.map partialFn
+            )
 
 
 moduleChangesDecoder : Decoder ModuleChanges
@@ -154,6 +176,14 @@ getModuleCommentDiff diff moduleName =
 hasCommentChanges : ApiDiff -> String -> Bool
 hasCommentChanges diff moduleName =
     Dict.member moduleName diff.commentDiffs
+
+
+{-| Get the old type JSON value for a changed item, if available.
+-}
+getOldType : ApiDiff -> String -> String -> Maybe Encode.Value
+getOldType diff moduleName itemName =
+    Dict.get moduleName diff.oldTypes
+        |> Maybe.andThen (Dict.get itemName)
 
 
 {-| Decode map6 helper since elm/json only goes up to map8.

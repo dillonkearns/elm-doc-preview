@@ -274,6 +274,7 @@ snapshotDiff =
         ]
     , commentDiffs = Dict.empty
     , readmeDiff = Nothing
+    , oldTypes = Dict.empty
     }
 
 
