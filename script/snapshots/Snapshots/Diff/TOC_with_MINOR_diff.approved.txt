@@ -1,10 +1,9 @@
 [1m[32m── MINOR CHANGE ────────────────────────[39m[22m
 
-[1m── Modules ──[22m
+[1m── Changed Modules ──[22m
 
-[32m+ [1mNewModule[22m        A newly added module.[39m
-[33m~ [1mChangedModule[22m    This module has changes.[39m
-  [1mUnchangedModule[22m  No changes here.
-[31m- [9mRemovedModule[29m    [39m
+[1m[42m[30m + [39m[49m[22m [1mNewModule[22m      A newly added module.
+[1m[43m[30m ~ [39m[49m[22m [1mChangedModule[22m  This module has changes.
+[1m[41m[30m - [39m[49m[22m [9mRemovedModule[29m  
 
 Use --module <name> to view a module's docs.

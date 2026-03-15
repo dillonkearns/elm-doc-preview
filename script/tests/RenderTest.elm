@@ -569,7 +569,7 @@ diffRenderTests =
                         result
             ]
         , describe "renderBlockWithDiff"
-            [ test "Added value has green + prefix" <|
+            [ test "Added value has green background + badge" <|
                 \() ->
                     let
                         block =
@@ -584,10 +584,10 @@ diffRenderTests =
                     in
                     Expect.all
                         [ \s -> s |> String.contains "+" |> Expect.equal True
-                        , \s -> s |> String.contains "[32m" |> Expect.equal True
+                        , \s -> s |> String.contains "[42m" |> Expect.equal True
                         ]
                         result
-            , test "Changed value has yellow ~ prefix" <|
+            , test "Changed value has yellow background ~ badge" <|
                 \() ->
                     let
                         block =
@@ -602,7 +602,7 @@ diffRenderTests =
                     in
                     Expect.all
                         [ \s -> s |> String.contains "~" |> Expect.equal True
-                        , \s -> s |> String.contains "[33m" |> Expect.equal True
+                        , \s -> s |> String.contains "[43m" |> Expect.equal True
                         ]
                         result
             , test "Unchanged value has no prefix marker" <|
@@ -623,7 +623,7 @@ diffRenderTests =
                         |> Expect.equal True
             ]
         , describe "renderRemovedItem"
-            [ test "renders removed item with red - and strikethrough" <|
+            [ test "renders removed item with red background badge and strikethrough" <|
                 \() ->
                     let
                         result =
@@ -632,13 +632,13 @@ diffRenderTests =
                     Expect.all
                         [ \s -> s |> String.contains "-" |> Expect.equal True
                         , \s -> s |> String.contains "oldFn" |> Expect.equal True
-                        , \s -> s |> String.contains "[31m" |> Expect.equal True
+                        , \s -> s |> String.contains "[41m" |> Expect.equal True
                         , \s -> s |> String.contains "[9m" |> Expect.equal True
                         ]
                         result
             ]
         , describe "renderTocWithDiff"
-            [ test "TOC shows diff markers for added, changed, removed modules" <|
+            [ test "TOC only shows changed modules, not unchanged ones" <|
                 \() ->
                     let
                         modules =
@@ -670,20 +670,20 @@ diffRenderTests =
                     in
                     Expect.all
                         [ \s -> s |> String.contains "MINOR CHANGE" |> Expect.equal True
-                        , \s -> s |> String.contains "+ " |> Expect.equal True
-                        , \s -> s |> String.contains "~ " |> Expect.equal True
-                        , \s -> s |> String.contains "- " |> Expect.equal True
+                        , \s -> s |> String.contains "NewModule" |> Expect.equal True
+                        , \s -> s |> String.contains "ChangedModule" |> Expect.equal True
                         , \s -> s |> String.contains "RemovedModule" |> Expect.equal True
+                        , \s -> s |> String.contains "UnchangedModule" |> Expect.equal False
                         ]
                         result
             ]
         , describe "renderModuleWithDiff"
-            [ test "module view annotates items with diff markers and appends removed items" <|
+            [ test "module view only shows changed items, not unchanged ones" <|
                 \() ->
                     let
                         module_ =
                             { name = "ChangedModule"
-                            , comment = "A module.\n\n@docs map, newHelper"
+                            , comment = "A module.\n\n@docs map, newHelper, stable"
                             , unions = []
                             , aliases = []
                             , values =
@@ -695,6 +695,10 @@ diffRenderTests =
                                   , comment = "A new helper."
                                   , tipe = Type.Type "Basics.Int" []
                                   }
+                                , { name = "stable"
+                                  , comment = "Unchanged function."
+                                  , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+                                  }
                                 ]
                             , binops = []
                             }
@@ -704,7 +708,10 @@ diffRenderTests =
                     in
                     Expect.all
                         [ \s -> s |> String.contains "ChangedModule" |> Expect.equal True
+                        , \s -> s |> String.contains "map" |> Expect.equal True
+                        , \s -> s |> String.contains "newHelper" |> Expect.equal True
                         , \s -> s |> String.contains "oldFn" |> Expect.equal True
+                        , \s -> s |> String.contains "stable" |> Expect.equal False
                         ]
                         result
             ]

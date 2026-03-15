@@ -582,8 +582,13 @@ magnitudeBanner magnitude =
 renderTocWithDiff : ApiDiff -> List Docs.Module -> String
 renderTocWithDiff diff modules =
     let
+        changedModules =
+            List.filter
+                (\mod -> Diff.moduleStatus diff mod.name /= ModuleUnchanged)
+                modules
+
         allNames =
-            List.map .name modules ++ diff.removedModules
+            List.map .name changedModules ++ diff.removedModules
 
         maxNameLen =
             allNames
@@ -604,23 +609,23 @@ renderTocWithDiff diff modules =
             in
             case status of
                 ModuleNew ->
-                    Ansi.Color.fontColor Ansi.Color.green ("+ " ++ Ansi.Font.bold mod.name ++ padding ++ summary)
+                    diffBadge Ansi.Color.green "+" ++ " " ++ Ansi.Font.bold mod.name ++ padding ++ summary
 
                 ModuleChanged ->
-                    Ansi.Color.fontColor Ansi.Color.yellow ("~ " ++ Ansi.Font.bold mod.name ++ padding ++ summary)
+                    diffBadge Ansi.Color.yellow "~" ++ " " ++ Ansi.Font.bold mod.name ++ padding ++ summary
 
                 _ ->
-                    "  " ++ Ansi.Font.bold mod.name ++ padding ++ summary
+                    "    " ++ Ansi.Font.bold mod.name ++ padding ++ summary
 
         renderRemovedRow name =
             let
                 padding =
                     String.repeat (maxNameLen - String.length name + 2) " "
             in
-            Ansi.Color.fontColor Ansi.Color.red ("- " ++ Ansi.Font.strikeThrough name ++ padding)
+            diffBadge Ansi.Color.red "-" ++ " " ++ Ansi.Font.strikeThrough name ++ padding
 
         rows =
-            List.map renderRow modules
+            List.map renderRow changedModules
 
         removedRows =
             List.map renderRemovedRow diff.removedModules
@@ -629,7 +634,7 @@ renderTocWithDiff diff modules =
             magnitudeBanner diff.magnitude
 
         header =
-            Ansi.Font.bold "── Modules ──"
+            Ansi.Font.bold "── Changed Modules ──"
 
         footer =
             "\nUse --module <name> to view a module's docs."
@@ -647,13 +652,13 @@ renderBlockWithDiff status block =
     in
     case status of
         Added ->
-            prefixLines (Ansi.Color.fontColor Ansi.Color.green "+") rendered
+            diffBadge Ansi.Color.green "+" ++ " " ++ rendered
 
         Changed ->
-            prefixLines (Ansi.Color.fontColor Ansi.Color.yellow "~") rendered
+            diffBadge Ansi.Color.yellow "~" ++ " " ++ rendered
 
         ModuleAdded ->
-            prefixLines (Ansi.Color.fontColor Ansi.Color.green "+") rendered
+            diffBadge Ansi.Color.green "+" ++ " " ++ rendered
 
         Unchanged ->
             rendered
@@ -663,7 +668,14 @@ renderBlockWithDiff status block =
 -}
 renderRemovedItem : String -> String
 renderRemovedItem name =
-    Ansi.Color.fontColor Ansi.Color.red ("- " ++ Ansi.Font.strikeThrough name)
+    diffBadge Ansi.Color.red "-" ++ " " ++ Ansi.Font.strikeThrough name
+
+
+{-| Render a prominent diff badge with background color.
+-}
+diffBadge : Ansi.Color.Color -> String -> String
+diffBadge color symbol =
+    Ansi.Font.bold (Ansi.Color.backgroundColor color (Ansi.Color.fontColor Ansi.Color.black (" " ++ symbol ++ " ")))
 
 
 {-| Render a complete module view with diff markers on each block.
@@ -677,16 +689,21 @@ renderModuleWithDiff diff module_ =
         blocks =
             Block.toBlocks module_
 
-        renderedBlocks =
-            List.map
-                (\block ->
-                    let
-                        status =
-                            blockDiffStatus diff module_.name block
-                    in
-                    renderBlockWithDiff status block
-                )
-                blocks
+        changedBlocks =
+            blocks
+                |> List.filterMap
+                    (\block ->
+                        let
+                            status =
+                                blockDiffStatus diff module_.name block
+                        in
+                        case status of
+                            Unchanged ->
+                                Nothing
+
+                            _ ->
+                                Just (renderBlockWithDiff status block)
+                    )
 
         removedItems =
             case Diff.findModuleChanges module_.name diff.changedModules of
@@ -697,7 +714,7 @@ renderModuleWithDiff diff module_ =
                     []
 
         allParts =
-            renderedBlocks ++ removedItems
+            changedBlocks ++ removedItems
     in
     header ++ "\n\n" ++ String.join "\n\n" allParts ++ "\n"
 
@@ -736,21 +753,6 @@ blockName block =
 
         Docs.UnknownBlock _ ->
             Nothing
-
-
-{-| Prefix the first line of a multi-line string with a marker.
--}
-prefixLines : String -> String -> String
-prefixLines marker text =
-    case String.lines text of
-        [] ->
-            marker
-
-        first :: rest ->
-            (marker ++ " " ++ String.trimLeft first)
-                :: rest
-                |> String.join "\n"
-
 
 
 -- MARKDOWN RENDERING
