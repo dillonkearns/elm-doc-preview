@@ -8,6 +8,7 @@
     "dependencies": {
         "direct": {
             "dillonkearns/elm-cli-options-parser": "5.0.1",
+            "dillonkearns/elm-markdown": "7.0.1",
             "dillonkearns/elm-pages": "12.1.0",
             "dillonkearns/elm-snapshot": "1.1.1",
             "elm/bytes": "1.0.8",

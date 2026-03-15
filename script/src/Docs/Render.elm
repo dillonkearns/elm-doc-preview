@@ -14,6 +14,10 @@ import Ansi.Font
 import Docs.Block as Block
 import Elm.Docs as Docs
 import Elm.Type as Type
+import Markdown.Block exposing (ListItem(..), Task(..))
+import Markdown.Html
+import Markdown.Parser
+import Markdown.Renderer exposing (Renderer)
 import SyntaxHighlight
 
 
@@ -384,187 +388,273 @@ renderBlock block =
 -- MARKDOWN RENDERING
 
 
+{-| Render markdown text to ANSI-formatted terminal output.
+-}
 renderMarkdown : String -> String
 renderMarkdown text =
-    text
-        |> String.lines
-        |> groupCodeBlocks
-        |> String.join "\n"
+    case
+        text
+            |> Markdown.Parser.parse
+            |> Result.mapError (\errors -> List.map Markdown.Parser.deadEndToString errors |> String.join "\n")
+            |> Result.andThen (Markdown.Renderer.render ansiRenderer)
+    of
+        Ok rendered ->
+            String.join "\n" rendered
+
+        Err _ ->
+            -- Fallback: return raw text
+            text
 
 
-{-| Group consecutive indented lines into code blocks and highlight them.
-Non-indented lines are rendered individually.
+{-| Render a doc comment as indented markdown.
 -}
-groupCodeBlocks : List String -> List String
-groupCodeBlocks lines =
-    groupCodeBlocksHelp lines [] []
-
-
-groupCodeBlocksHelp : List String -> List String -> List String -> List String
-groupCodeBlocksHelp remaining codeAcc resultAcc =
-    case remaining of
-        [] ->
-            List.reverse (flushCodeBlock codeAcc resultAcc)
-
-        line :: rest ->
-            if String.startsWith "    " line then
-                groupCodeBlocksHelp rest (String.dropLeft 4 line :: codeAcc) resultAcc
-
-            else
-                let
-                    flushed =
-                        flushCodeBlock codeAcc resultAcc
-                in
-                groupCodeBlocksHelp rest [] (renderMarkdownLine line :: flushed)
-
-
-flushCodeBlock : List String -> List String -> List String
-flushCodeBlock codeAcc resultAcc =
-    case codeAcc of
-        [] ->
-            resultAcc
-
-        _ ->
-            let
-                codeText =
-                    codeAcc |> List.reverse |> String.join "\n"
-
-                highlighted =
-                    highlightElm "    " codeText
-            in
-            highlighted :: resultAcc
-
-
-renderMarkdownLine : String -> String
-renderMarkdownLine line =
-    if String.startsWith "# " line then
-        Ansi.Font.bold (String.dropLeft 2 line)
-
-    else if String.startsWith "## " line then
-        Ansi.Font.bold (String.dropLeft 3 line)
-
-    else if String.startsWith "### " line then
-        Ansi.Font.bold (String.dropLeft 4 line)
-
-    else
-        line
-
-
-
--- HELPERS
-
-
 indentComment : String -> String
 indentComment comment =
     comment
         |> String.trim
+        |> renderMarkdown
         |> String.lines
-        |> groupIndentedCodeBlocks
+        |> List.map
+            (\line ->
+                if String.isEmpty (String.trim line) then
+                    ""
+
+                else
+                    "    " ++ line
+            )
         |> String.join "\n"
 
 
-{-| Process doc comment lines: indent prose with 4 spaces, and highlight
-indented code blocks (4+ spaces) as Elm with syntax highlighting.
--}
-groupIndentedCodeBlocks : List String -> List String
-groupIndentedCodeBlocks lines =
-    groupIndentedHelp lines [] []
+
+-- ANSI MARKDOWN RENDERER
 
 
-groupIndentedHelp : List String -> List String -> List String -> List String
-groupIndentedHelp remaining codeAcc resultAcc =
-    case remaining of
-        [] ->
-            List.reverse (flushIndentedCodeBlock codeAcc resultAcc)
+ansiRenderer : Renderer String
+ansiRenderer =
+    { heading = heading
+    , paragraph = \children -> String.join "" children ++ "\n"
+    , blockQuote = blockQuote
+    , html = Markdown.Html.oneOf []
+    , text = identity
+    , codeSpan = \code -> Ansi.Color.fontColor Ansi.Color.cyan code
+    , strong = \children -> Ansi.Font.bold (String.join "" children)
+    , emphasis = \children -> Ansi.Font.italic (String.join "" children)
+    , strikethrough = \children -> Ansi.Font.strikeThrough (String.join "" children)
+    , hardLineBreak = "\n"
+    , link = link
+    , image = image
+    , unorderedList = unorderedList
+    , orderedList = orderedList
+    , codeBlock = codeBlock
+    , thematicBreak = thematicBreak
+    , table = \children -> String.join "" children ++ "\n"
+    , tableHeader = \children -> String.join "" children ++ "\n"
+    , tableBody = \children -> String.join "" children
+    , tableRow = \children -> "| " ++ String.join " | " children ++ " |\n"
+    , tableCell = \_ children -> String.join "" children
+    , tableHeaderCell = \_ children -> Ansi.Font.bold (String.join "" children)
+    }
 
-        line :: rest ->
-            if String.isEmpty (String.trim line) then
-                if List.isEmpty codeAcc then
-                    groupIndentedHelp rest [] ("" :: resultAcc)
 
-                else
-                    -- Empty line inside a code block
-                    groupIndentedHelp rest ("" :: codeAcc) resultAcc
+heading : { level : Markdown.Block.HeadingLevel, rawText : String, children : List String } -> String
+heading { level, children } =
+    let
+        prefix =
+            case level of
+                Markdown.Block.H1 ->
+                    "# "
 
-            else if String.startsWith "    " line then
-                groupIndentedHelp rest (String.dropLeft 4 line :: codeAcc) resultAcc
+                Markdown.Block.H2 ->
+                    "## "
 
-            else
+                Markdown.Block.H3 ->
+                    "### "
+
+                Markdown.Block.H4 ->
+                    "#### "
+
+                Markdown.Block.H5 ->
+                    "##### "
+
+                Markdown.Block.H6 ->
+                    "###### "
+
+        content =
+            String.join "" children
+    in
+    "\n" ++ Ansi.Font.bold (Ansi.Color.fontColor Ansi.Color.magenta (prefix ++ content)) ++ "\n"
+
+
+blockQuote : List String -> String
+blockQuote children =
+    children
+        |> String.join ""
+        |> String.lines
+        |> List.map (\line -> Ansi.Color.fontColor Ansi.Color.brightBlack ("  > " ++ line))
+        |> String.join "\n"
+        |> (\s -> s ++ "\n")
+
+
+link : { title : Maybe String, destination : String } -> List String -> String
+link { destination } children =
+    let
+        label =
+            String.join "" children
+    in
+    Ansi.Font.underline (Ansi.Color.fontColor Ansi.Color.blue label)
+        ++ " ("
+        ++ Ansi.Color.fontColor Ansi.Color.brightBlack destination
+        ++ ")"
+
+
+image : { alt : String, src : String, title : Maybe String } -> String
+image { alt, src } =
+    Ansi.Color.fontColor Ansi.Color.yellow ("[image: " ++ alt ++ "]")
+        ++ " ("
+        ++ Ansi.Color.fontColor Ansi.Color.brightBlack src
+        ++ ")"
+
+
+unorderedList : List (ListItem String) -> String
+unorderedList items =
+    items
+        |> List.map
+            (\(ListItem task children) ->
                 let
-                    flushed =
-                        flushIndentedCodeBlock codeAcc resultAcc
+                    bullet =
+                        case task of
+                            NoTask ->
+                                Ansi.Color.fontColor Ansi.Color.green "  * "
+
+                            IncompleteTask ->
+                                Ansi.Color.fontColor Ansi.Color.yellow "  [ ] "
+
+                            CompletedTask ->
+                                Ansi.Color.fontColor Ansi.Color.green "  [x] "
                 in
-                groupIndentedHelp rest [] (("    " ++ line) :: flushed)
+                bullet ++ String.join "" children
+            )
+        |> String.join "\n"
+        |> (\s -> s ++ "\n")
 
 
-flushIndentedCodeBlock : List String -> List String -> List String
-flushIndentedCodeBlock codeAcc resultAcc =
-    case codeAcc of
-        [] ->
-            resultAcc
+orderedList : Int -> List (List String) -> String
+orderedList startIndex items =
+    items
+        |> List.indexedMap
+            (\i children ->
+                let
+                    num =
+                        String.fromInt (startIndex + i)
+                in
+                "  "
+                    ++ Ansi.Color.fontColor Ansi.Color.green (num ++ ". ")
+                    ++ String.join "" children
+            )
+        |> String.join "\n"
+        |> (\s -> s ++ "\n")
 
-        _ ->
-            let
-                codeText =
-                    codeAcc |> List.reverse |> String.join "\n"
 
-                highlighted =
-                    highlightElm "      " codeText
-            in
-            highlighted :: resultAcc
+codeBlock : { body : String, language : Maybe String } -> String
+codeBlock { body, language } =
+    highlightCode (language |> Maybe.withDefault "elm") body
+
+
+thematicBreak : String
+thematicBreak =
+    Ansi.Color.fontColor Ansi.Color.brightBlack (String.repeat 40 "─") ++ "\n"
 
 
 
 -- SYNTAX HIGHLIGHTING
 
 
+highlightCode : String -> String -> String
+highlightCode language body =
+    let
+        trimmedBody =
+            String.trimRight body
+
+        parser =
+            case language of
+                "elm" ->
+                    Just SyntaxHighlight.elm
+
+                "javascript" ->
+                    Just SyntaxHighlight.javascript
+
+                "js" ->
+                    Just SyntaxHighlight.javascript
+
+                "json" ->
+                    Just SyntaxHighlight.json
+
+                "css" ->
+                    Just SyntaxHighlight.css
+
+                "xml" ->
+                    Just SyntaxHighlight.xml
+
+                "html" ->
+                    Just SyntaxHighlight.xml
+
+                "python" ->
+                    Just SyntaxHighlight.python
+
+                "py" ->
+                    Just SyntaxHighlight.python
+
+                "sql" ->
+                    Just SyntaxHighlight.sql
+
+                "go" ->
+                    Just SyntaxHighlight.go
+
+                "nix" ->
+                    Just SyntaxHighlight.nix
+
+                "kotlin" ->
+                    Just SyntaxHighlight.kotlin
+
+                _ ->
+                    Nothing
+
+        fallback =
+            trimmedBody
+                |> String.lines
+                |> List.map (\line -> "    " ++ Ansi.Color.fontColor Ansi.Color.yellow line)
+                |> String.join "\n"
+                |> (\s -> s ++ "\n")
+    in
+    case parser of
+        Just parse ->
+            case parse trimmedBody of
+                Ok hcode ->
+                    hcode
+                        |> SyntaxHighlight.toConsole consoleOptions
+                        |> List.map (\line -> "    " ++ String.replace "\n" "" line)
+                        |> String.join "\n"
+                        |> (\s -> s ++ "\n")
+
+                Err _ ->
+                    fallback
+
+        Nothing ->
+            fallback
+
+
 consoleOptions : SyntaxHighlight.ConsoleOptions
 consoleOptions =
-    { default = identity
-    , highlight = identity
-    , addition = identity
-    , deletion = identity
+    { default = Ansi.Color.fontColor Ansi.Color.white
+    , highlight = Ansi.Color.backgroundColor Ansi.Color.brightBlack
+    , addition = Ansi.Color.fontColor Ansi.Color.green
+    , deletion = Ansi.Color.fontColor Ansi.Color.red
     , comment = Ansi.Color.fontColor Ansi.Color.brightBlack
-    , style1 = Ansi.Color.fontColor Ansi.Color.magenta -- numbers
+    , style1 = Ansi.Color.fontColor Ansi.Color.cyan -- numbers
     , style2 = Ansi.Color.fontColor Ansi.Color.green -- strings
-    , style3 = Ansi.Color.fontColor Ansi.Color.magenta -- keywords, operators
-    , style4 = Ansi.Color.fontColor Ansi.Color.cyan -- type signatures, group symbols
+    , style3 = Ansi.Color.fontColor Ansi.Color.magenta -- keywords, tags
+    , style4 = Ansi.Color.fontColor Ansi.Color.yellow -- group symbols
     , style5 = Ansi.Color.fontColor Ansi.Color.blue -- functions
-    , style6 = Ansi.Color.fontColor Ansi.Color.yellow -- capitalized types
-    , style7 = identity -- parameters
+    , style6 = Ansi.Color.fontColor Ansi.Color.red -- literal keywords
+    , style7 = Ansi.Color.fontColor Ansi.Color.brightCyan -- arguments
     }
-
-
-{-| Highlight a code string as Elm with ANSI colors.
-Each line is prefixed with the given indent string.
-Falls back to dim/faint rendering if parsing fails.
--}
-highlightElm : String -> String -> String
-highlightElm indent code =
-    case SyntaxHighlight.elm code of
-        Ok hcode ->
-            hcode
-                |> SyntaxHighlight.toConsole consoleOptions
-                |> List.map
-                    (\line ->
-                        if String.isEmpty (String.trim line) then
-                            ""
-
-                        else
-                            indent ++ line
-                    )
-                |> String.join "\n"
-
-        Err _ ->
-            -- Fallback: just dim the code
-            code
-                |> String.lines
-                |> List.map
-                    (\line ->
-                        if String.isEmpty (String.trim line) then
-                            ""
-
-                        else
-                            indent ++ Ansi.Font.faint line
-                    )
-                |> String.join "\n"

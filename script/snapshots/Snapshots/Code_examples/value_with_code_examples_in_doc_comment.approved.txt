@@ -2,11 +2,10 @@
 
     Apply a function to every element of a list.
 
-      [34mmap[39m sqrt [36m[[39m[35m1[39m[36m,[39m [35m4[39m[36m,[39m [35m9[39m[36m][39m  [35m==[39m  [36m[[39m[35m1[39m[36m,[39m [35m2[39m[36m,[39m [35m3[39m[36m][39m
+        [34mmap[39m[37m sqrt [39m[33m[[39m[36m1[39m[33m,[39m[37m [39m[36m4[39m[33m,[39m[37m [39m[36m9[39m[33m][39m[37m  [39m[35m==[39m[37m  [39m[33m[[39m[36m1[39m[33m,[39m[37m [39m[36m2[39m[33m,[39m[37m [39m[36m3[39m[33m][39m[37m[39m
+        [37m[39m
+        [37m[39m
+        [34mmap[39m[37m not [39m[33m[[39m[31mTrue[39m[33m,[39m[37m [39m[31mFalse[39m[33m][39m[37m  [39m[35m==[39m[37m  [39m[33m[[39m[31mFalse[39m[33m,[39m[37m [39m[31mTrue[39m[33m][39m
 
-
-      [34mmap[39m not [36m[[39m[33mTrue[39m[36m,[39m [33mFalse[39m[36m][39m  [35m==[39m  [36m[[39m[33mFalse[39m[36m,[39m [33mTrue[39m[36m][39m
-
-
-    So `map func [ a, b, c ]` is the same as
-    `[ func a, func b, func c ]`
+    So [36mmap func [ a, b, c ][39m is the same as
+    [36m[ func a, func b, func c ][39m
