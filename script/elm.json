@@ -15,6 +15,7 @@
             "elm/html": "1.0.1",
             "elm/json": "1.1.4",
             "elm/project-metadata-utils": "1.0.2",
+            "pablohirafuji/elm-syntax-highlight": "3.7.1",
             "wolfadex/elm-ansi": "3.0.1"
         },
         "indirect": {

@@ -2,9 +2,11 @@
 
     Apply a function to every element of a list.
 
-    [2mmap sqrt [1, 4, 9]  ==  [1, 2, 3][22m
+      [34mmap[39m sqrt [36m[[39m[35m1[39m[36m,[39m [35m4[39m[36m,[39m [35m9[39m[36m][39m  [35m==[39m  [36m[[39m[35m1[39m[36m,[39m [35m2[39m[36m,[39m [35m3[39m[36m][39m
 
-    [2mmap not [True, False]  ==  [False, True][22m
+
+      [34mmap[39m not [36m[[39m[33mTrue[39m[36m,[39m [33mFalse[39m[36m][39m  [35m==[39m  [36m[[39m[33mFalse[39m[36m,[39m [33mTrue[39m[36m][39m
+
 
     So `map func [ a, b, c ]` is the same as
     `[ func a, func b, func c ]`

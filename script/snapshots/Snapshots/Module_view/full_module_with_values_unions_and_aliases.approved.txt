@@ -6,8 +6,9 @@ A module for working with data.
 
     Return the argument unchanged.
 
-    [2midentity 5 == 5[22m
-    [2midentity "hello" == "hello"[22m
+      [34midentity[39m [35m5[39m [35m==[39m [35m5[39m
+
+      [34midentity[39m [32m"hello"[39m [35m==[39m [32m"hello"[39m
 
   [1mtype Color[22m
       = Red
