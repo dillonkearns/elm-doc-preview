@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
-import { computeDiff } from "../lib/compute-diff.js";
+import { computeDiff as computeDiffLib } from "../lib/compute-diff.js";
 
 /**
  * Build docs.json for an Elm application by creating a temporary package project.
@@ -218,144 +218,19 @@ function hasModuleDoc(contents: string): boolean {
 }
 
 /**
- * Compute an API diff between two versions of docs.
- *
- * Modes:
- * - "refs" mode: { mode: "refs", base: "<git-ref>", sourceDirectories, directDeps, projectDir }
- *   Creates a git worktree for the base ref, builds docs, and diffs against head docs.
- * - "published" mode: { mode: "published", packageName: "author/project", version: "1.0.0" }
- *   Fetches published docs.json from package.elm-lang.org and diffs against head docs.
- *
- * headDocs is always the current docs JSON string.
+ * Compute an API diff between two docs.json strings.
+ * Pure function wrapper — all orchestration (worktrees, HTTP) is in Elm.
  */
-export async function computeApiDiff(
+export async function computeDiff(
   rawInput: unknown,
   _context: unknown
 ): Promise<unknown> {
   const input = rawInput as {
-    mode: string;
+    baseDocs: string;
     headDocs: string;
-    base?: string;
-    sourceDirectories?: string[];
-    directDeps?: Record<string, string>;
-    projectDir?: string;
-    packageName?: string;
-    version?: string;
   };
 
+  const baseDocs = JSON.parse(input.baseDocs);
   const headDocs = JSON.parse(input.headDocs);
-  let baseDocs: unknown[];
-
-  if (input.mode === "refs") {
-    baseDocs = await buildDocsFromRef(
-      input.base!,
-      input.sourceDirectories!,
-      input.directDeps!,
-      input.projectDir!
-    );
-  } else if (input.mode === "published") {
-    baseDocs = await fetchPublishedDocs(input.packageName!, input.version!);
-  } else {
-    throw new Error(`Unknown diff mode: ${input.mode}`);
-  }
-
-  const diff = computeDiff(baseDocs as any, headDocs);
-  return diff;
-}
-
-async function buildDocsFromRef(
-  ref: string,
-  sourceDirectories: string[],
-  directDeps: Record<string, string>,
-  projectDir: string
-): Promise<unknown[]> {
-  // git worktree add needs a non-existent directory, so create a unique path
-  // without actually creating the directory
-  const worktreeDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "elm-doc-diff-base-")
-  );
-  fs.rmSync(worktreeDir, { recursive: true, force: true });
-
-  try {
-    // Prune stale worktrees before creating a new one
-    try {
-      execSync("git worktree prune", { cwd: projectDir, stdio: "pipe" });
-    } catch {
-      // Best effort
-    }
-
-    // Create a git worktree for the base ref
-    execSync(`git worktree add --detach "${worktreeDir}" "${ref}"`, {
-      cwd: projectDir,
-      stdio: "pipe",
-    });
-
-    // Read elm.json from the worktree to get its source directories
-    const worktreeElmJsonPath = path.join(worktreeDir, "elm.json");
-    let worktreeSrcDirs = sourceDirectories;
-    let worktreeDeps = directDeps;
-
-    if (fs.existsSync(worktreeElmJsonPath)) {
-      const worktreeElmJson = JSON.parse(
-        fs.readFileSync(worktreeElmJsonPath, "utf8")
-      );
-
-      if (worktreeElmJson.type === "package") {
-        // For packages, just run elm make --docs in the worktree
-        const docsPath = path.join(worktreeDir, "docs.json");
-        execSync(`elm make --docs=${docsPath}`, {
-          cwd: worktreeDir,
-          stdio: "pipe",
-        });
-        return JSON.parse(fs.readFileSync(docsPath, "utf8"));
-      }
-
-      // For applications, use worktree's elm.json settings
-      if (worktreeElmJson["source-directories"]) {
-        worktreeSrcDirs = worktreeElmJson["source-directories"];
-      }
-      if (worktreeElmJson.dependencies?.direct) {
-        worktreeDeps = worktreeElmJson.dependencies.direct;
-      }
-    }
-
-    // Build application docs using the same approach as buildApplicationDocs
-    const docsJson = await buildApplicationDocs(
-      {
-        sourceDirectories: worktreeSrcDirs,
-        directDeps: worktreeDeps,
-        projectDir: worktreeDir,
-      },
-      null
-    );
-
-    return JSON.parse(docsJson);
-  } finally {
-    // Clean up worktree
-    try {
-      execSync(`git worktree remove --force "${worktreeDir}"`, {
-        cwd: projectDir,
-        stdio: "pipe",
-      });
-    } catch {
-      // Best effort cleanup
-      fs.rmSync(worktreeDir, { recursive: true, force: true });
-    }
-  }
-}
-
-async function fetchPublishedDocs(
-  packageName: string,
-  version: string
-): Promise<unknown[]> {
-  const url = `https://package.elm-lang.org/packages/${packageName}/${version}/docs.json`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch published docs from ${url}: ${response.status} ${response.statusText}`
-    );
-  }
-
-  return (await response.json()) as unknown[];
+  return computeDiffLib(baseDocs, headDocs);
 }

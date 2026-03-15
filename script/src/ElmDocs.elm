@@ -4,6 +4,7 @@ import BackendTask exposing (BackendTask)
 import BackendTask.Custom
 import BackendTask.Do as Do
 import BackendTask.File
+import BackendTask.Http
 import Cli.Option as Option
 import Cli.OptionsParser as OptionsParser
 import Cli.Program as Program
@@ -131,25 +132,27 @@ buildDocs options elmJson =
 
 buildApplicationDocs : CliOptions -> ElmJson -> BackendTask FatalError ()
 buildApplicationDocs options elmJson =
+    BackendTask.Custom.run "buildApplicationDocs"
+        (encodeAppDocsInput elmJson ".")
+        Decode.string
+        |> BackendTask.quiet
+        |> BackendTask.allowFatal
+        |> BackendTask.andThen (decodeAndRender options elmJson)
+
+
+encodeAppDocsInput : ElmJson -> String -> Encode.Value
+encodeAppDocsInput elmJson projectDir =
     let
         depsObj =
             elmJson.directDeps
                 |> List.map (\( name, version ) -> ( name, Encode.string version ))
                 |> Encode.object
-
-        input =
-            Encode.object
-                [ ( "sourceDirectories", Encode.list Encode.string elmJson.sourceDirectories )
-                , ( "directDeps", depsObj )
-                , ( "projectDir", Encode.string "." )
-                ]
     in
-    BackendTask.Custom.run "buildApplicationDocs"
-        input
-        Decode.string
-        |> BackendTask.quiet
-        |> BackendTask.allowFatal
-        |> BackendTask.andThen (decodeAndRender options elmJson)
+    Encode.object
+        [ ( "sourceDirectories", Encode.list Encode.string elmJson.sourceDirectories )
+        , ( "directDeps", depsObj )
+        , ( "projectDir", Encode.string projectDir )
+        ]
 
 
 decodeAndRender : CliOptions -> ElmJson -> String -> BackendTask FatalError ()
@@ -161,47 +164,17 @@ decodeAndRender options elmJson jsonString =
                     renderOutput options Nothing modules
 
                 DiffPublished ->
-                    case ( elmJson.packageName, elmJson.packageVersion ) of
-                        ( Just name, Just version ) ->
-                            computeDiff
-                                (Encode.object
-                                    [ ( "mode", Encode.string "published" )
-                                    , ( "headDocs", Encode.string jsonString )
-                                    , ( "packageName", Encode.string name )
-                                    , ( "version", Encode.string version )
-                                    ]
-                                )
-                                |> BackendTask.andThen
-                                    (\maybeDiff ->
-                                        renderOutput options maybeDiff modules
-                                    )
-
-                        _ ->
-                            BackendTask.fail
-                                (FatalError.fromString
-                                    "--diff without refs only works for packages with a published version. Use --diff base..head for applications."
-                                )
-
-                DiffRefs base head ->
-                    let
-                        depsObj =
-                            elmJson.directDeps
-                                |> List.map (\( n, v ) -> ( n, Encode.string v ))
-                                |> Encode.object
-                    in
-                    computeDiff
-                        (Encode.object
-                            [ ( "mode", Encode.string "refs" )
-                            , ( "headDocs", Encode.string jsonString )
-                            , ( "base", Encode.string base )
-                            , ( "sourceDirectories", Encode.list Encode.string elmJson.sourceDirectories )
-                            , ( "directDeps", depsObj )
-                            , ( "projectDir", Encode.string "." )
-                            ]
-                        )
+                    fetchPublishedDiff elmJson jsonString
                         |> BackendTask.andThen
-                            (\maybeDiff ->
-                                renderOutput options maybeDiff modules
+                            (\maybeDiff -> renderOutput options maybeDiff modules)
+
+                DiffRefs base _ ->
+                    buildBaseDocs base elmJson
+                        |> BackendTask.andThen
+                            (\baseDocsJson ->
+                                computeDiff baseDocsJson jsonString
+                                    |> BackendTask.andThen
+                                        (\maybeDiff -> renderOutput options maybeDiff modules)
                             )
 
         Err err ->
@@ -211,13 +184,133 @@ decodeAndRender options elmJson jsonString =
                 )
 
 
-computeDiff : Encode.Value -> BackendTask FatalError (Maybe ApiDiff)
-computeDiff input =
-    BackendTask.Custom.run "computeApiDiff"
-        input
+
+-- DIFF: PUBLISHED MODE
+
+
+fetchPublishedDiff : ElmJson -> String -> BackendTask FatalError (Maybe ApiDiff)
+fetchPublishedDiff elmJson headDocsJson =
+    case ( elmJson.packageName, elmJson.packageVersion ) of
+        ( Just name, Just version ) ->
+            let
+                url =
+                    "https://package.elm-lang.org/packages/"
+                        ++ name
+                        ++ "/"
+                        ++ version
+                        ++ "/docs.json"
+            in
+            BackendTask.Http.get url BackendTask.Http.expectString
+                |> BackendTask.allowFatal
+                |> BackendTask.andThen
+                    (\baseDocsJson -> computeDiff baseDocsJson headDocsJson)
+
+        _ ->
+            BackendTask.fail
+                (FatalError.fromString
+                    "--diff without refs only works for packages with a published version. Use --diff base..head for applications."
+                )
+
+
+
+-- DIFF: REFS MODE
+
+
+buildBaseDocs : String -> ElmJson -> BackendTask FatalError String
+buildBaseDocs ref elmJson =
+    createWorktree ref
+        |> BackendTask.andThen
+            (\tempDir ->
+                buildDocsInWorktree tempDir elmJson
+                    |> BackendTask.andThen
+                        (\baseDocs ->
+                            cleanupWorktree tempDir
+                                |> BackendTask.map (\() -> baseDocs)
+                        )
+            )
+
+
+createWorktree : String -> BackendTask FatalError String
+createWorktree ref =
+    Script.command "mktemp" [ "-d" ]
+        |> BackendTask.map String.trim
+        |> BackendTask.andThen
+            (\tempDir ->
+                Script.exec "rm" [ "-rf", tempDir ]
+                    |> BackendTask.quiet
+                    |> BackendTask.andThen
+                        (\() ->
+                            Script.exec "git" [ "worktree", "add", "--detach", tempDir, ref ]
+                                |> BackendTask.quiet
+                                |> BackendTask.map (\() -> tempDir)
+                        )
+            )
+
+
+buildDocsInWorktree : String -> ElmJson -> BackendTask FatalError String
+buildDocsInWorktree tempDir elmJson =
+    BackendTask.File.rawFile (tempDir ++ "/elm.json")
+        |> BackendTask.allowFatal
+        |> BackendTask.andThen
+            (\worktreeElmJsonStr ->
+                case Decode.decodeString elmJsonDecoder worktreeElmJsonStr of
+                    Ok worktreeElmJson ->
+                        if worktreeElmJson.projectType == "package" then
+                            buildPackageDocsInDir tempDir
+
+                        else
+                            BackendTask.Custom.run "buildApplicationDocs"
+                                (encodeAppDocsInput worktreeElmJson tempDir)
+                                Decode.string
+                                |> BackendTask.quiet
+                                |> BackendTask.allowFatal
+
+                    Err _ ->
+                        BackendTask.fail
+                            (FatalError.fromString "Could not parse elm.json in worktree.")
+            )
+
+
+buildPackageDocsInDir : String -> BackendTask FatalError String
+buildPackageDocsInDir dir =
+    let
+        docsPath =
+            dir ++ "/docs.json"
+    in
+    Script.exec "bash" [ "-c", "cd '" ++ dir ++ "' && elm make --docs=docs.json" ]
+        |> BackendTask.quiet
+        |> BackendTask.andThen
+            (\() ->
+                BackendTask.File.rawFile docsPath
+                    |> BackendTask.allowFatal
+            )
+
+
+cleanupWorktree : String -> BackendTask FatalError ()
+cleanupWorktree tempDir =
+    Script.exec "git" [ "worktree", "remove", "--force", tempDir ]
+        |> BackendTask.quiet
+
+
+
+-- DIFF: COMPUTE
+
+
+computeDiff : String -> String -> BackendTask FatalError (Maybe ApiDiff)
+computeDiff baseDocsJson headDocsJson =
+    BackendTask.Custom.run "computeDiff"
+        (Encode.object
+            [ ( "baseDocs", Encode.string baseDocsJson )
+            , ( "headDocs", Encode.string headDocsJson )
+            ]
+        )
         Diff.decoder
         |> BackendTask.quiet
         |> BackendTask.allowFatal
+
+
+
+-- RENDERING
 
 
 renderOutput : CliOptions -> Maybe ApiDiff -> List Docs.Module -> BackendTask FatalError ()
