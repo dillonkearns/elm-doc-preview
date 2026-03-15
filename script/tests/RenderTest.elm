@@ -1,5 +1,6 @@
 module RenderTest exposing (suite)
 
+import Dict
 import Docs.Diff as Diff exposing (DiffStatus(..))
 import Docs.Render as Render
 import Elm.Docs as Docs
@@ -527,6 +528,8 @@ sampleDiff =
           , removed = [ "oldFn" ]
           }
         ]
+    , commentDiffs = Dict.empty
+    , readmeDiff = Nothing
     }
 
 
@@ -580,7 +583,7 @@ diffRenderTests =
                                 }
 
                         result =
-                            Render.renderBlockWithDiff Added block
+                            Render.renderBlockWithDiff sampleDiff "SomeModule" Added block
                     in
                     Expect.all
                         [ \s -> s |> String.contains "+" |> Expect.equal True
@@ -598,7 +601,7 @@ diffRenderTests =
                                 }
 
                         result =
-                            Render.renderBlockWithDiff Changed block
+                            Render.renderBlockWithDiff sampleDiff "SomeModule" Changed block
                     in
                     Expect.all
                         [ \s -> s |> String.contains "~" |> Expect.equal True
@@ -616,7 +619,7 @@ diffRenderTests =
                                 }
 
                         result =
-                            Render.renderBlockWithDiff Unchanged block
+                            Render.renderBlockWithDiff sampleDiff "SomeModule" Unchanged block
                     in
                     result
                         |> String.startsWith "  "
@@ -711,6 +714,56 @@ diffRenderTests =
                         , \s -> s |> String.contains "map" |> Expect.equal True
                         , \s -> s |> String.contains "newHelper" |> Expect.equal True
                         , \s -> s |> String.contains "oldFn" |> Expect.equal True
+                        , \s -> s |> String.contains "stable" |> Expect.equal False
+                        ]
+                        result
+            ]
+        , describe "renderFullDiff"
+            [ test "full diff shows banner and all changed modules expanded, not unchanged" <|
+                \() ->
+                    let
+                        modules =
+                            [ { name = "ChangedModule"
+                              , comment = "A module.\n\n@docs map, newHelper"
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "map"
+                                      , comment = "Map function."
+                                      , tipe = Type.Lambda (Type.Var "a") (Type.Var "b")
+                                      }
+                                    , { name = "newHelper"
+                                      , comment = "A new helper."
+                                      , tipe = Type.Type "Basics.Int" []
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            , { name = "UnchangedModule"
+                              , comment = "No changes.\n\n@docs stable"
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "stable"
+                                      , comment = "Stable."
+                                      , tipe = Type.Var "a"
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+
+                        result =
+                            Render.renderFullDiff sampleDiff modules
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "MINOR CHANGE" |> Expect.equal True
+                        , \s -> s |> String.contains "ChangedModule" |> Expect.equal True
+                        , \s -> s |> String.contains "map" |> Expect.equal True
+                        , \s -> s |> String.contains "newHelper" |> Expect.equal True
+                        , \s -> s |> String.contains "oldFn" |> Expect.equal True
+                        , \s -> s |> String.contains "RemovedModule" |> Expect.equal True
+                        , \s -> s |> String.contains "UnchangedModule" |> Expect.equal False
                         , \s -> s |> String.contains "stable" |> Expect.equal False
                         ]
                         result

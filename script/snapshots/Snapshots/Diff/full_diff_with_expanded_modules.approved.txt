@@ -1,0 +1,18 @@
+[1m[32m── MINOR CHANGE ────────────────────────[39m[22m
+
+[1m── ChangedModule ───────────────────────────[22m
+
+[1m[43m[30m ~ [39m[49m[22m   [1mmap[22m : [36m(a -> b) -> List a -> List b[39m
+
+    Map over things.
+
+
+[1m[42m[30m + [39m[49m[22m   [1mnewHelper[22m : [36mString -> Int[39m
+
+    A new helper function.
+
+
+[1m[41m[30m - [39m[49m[22m [9moldFn[29m
+
+
+[1m[41m[30m - [39m[49m[22m [1m[9mRemovedModule[29m[22m

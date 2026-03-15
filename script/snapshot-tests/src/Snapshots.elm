@@ -1,5 +1,6 @@
 module Snapshots exposing (run)
 
+import Dict
 import Docs.Diff as Diff
 import Docs.Render as Render
 import Elm.Docs as Docs
@@ -271,6 +272,8 @@ snapshotDiff =
           , removed = [ "oldFn" ]
           }
         ]
+    , commentDiffs = Dict.empty
+    , readmeDiff = Nothing
     }
 
 
@@ -340,4 +343,46 @@ diffSnapshots =
                         ]
                     , binops = []
                     }
+        , Snapshot.test "full diff with expanded modules" <|
+            \() ->
+                Render.renderFullDiff snapshotDiff
+                    [ { name = "ChangedModule"
+                      , comment = "A module with changes.\n\n@docs map, newHelper, stable"
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "map"
+                              , comment = "Map over things."
+                              , tipe =
+                                    Type.Lambda
+                                        (Type.Lambda (Type.Var "a") (Type.Var "b"))
+                                        (Type.Lambda
+                                            (Type.Type "List.List" [ Type.Var "a" ])
+                                            (Type.Type "List.List" [ Type.Var "b" ])
+                                        )
+                              }
+                            , { name = "newHelper"
+                              , comment = "A new helper function."
+                              , tipe = Type.Lambda (Type.Type "String.String" []) (Type.Type "Basics.Int" [])
+                              }
+                            , { name = "stable"
+                              , comment = "An unchanged function."
+                              , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+                              }
+                            ]
+                      , binops = []
+                      }
+                    , { name = "UnchangedModule"
+                      , comment = "No changes.\n\n@docs thing"
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "thing"
+                              , comment = "A thing."
+                              , tipe = Type.Var "a"
+                              }
+                            ]
+                      , binops = []
+                      }
+                    ]
         ]

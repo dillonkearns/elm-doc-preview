@@ -171,10 +171,14 @@ decodeAndRender options elmJson jsonString =
                 DiffRefs base _ ->
                     buildBaseDocs base elmJson
                         |> BackendTask.andThen
-                            (\baseDocsJson ->
-                                computeDiff baseDocsJson jsonString
+                            (\{ baseDocs, baseReadme } ->
+                                readOptionalFile "README.md"
                                     |> BackendTask.andThen
-                                        (\maybeDiff -> renderOutput options maybeDiff modules)
+                                        (\headReadme ->
+                                            computeDiffWithReadme baseDocs jsonString baseReadme headReadme
+                                                |> BackendTask.andThen
+                                                    (\maybeDiff -> renderOutput options maybeDiff modules)
+                                        )
                             )
 
         Err err ->
@@ -216,7 +220,7 @@ fetchPublishedDiff elmJson headDocsJson =
 -- DIFF: REFS MODE
 
 
-buildBaseDocs : String -> ElmJson -> BackendTask FatalError String
+buildBaseDocs : String -> ElmJson -> BackendTask FatalError { baseDocs : String, baseReadme : Maybe String }
 buildBaseDocs ref elmJson =
     createWorktree ref
         |> BackendTask.andThen
@@ -224,8 +228,12 @@ buildBaseDocs ref elmJson =
                 buildDocsInWorktree tempDir elmJson
                     |> BackendTask.andThen
                         (\baseDocs ->
-                            cleanupWorktree tempDir
-                                |> BackendTask.map (\() -> baseDocs)
+                            readOptionalFile (tempDir ++ "/README.md")
+                                |> BackendTask.andThen
+                                    (\baseReadme ->
+                                        cleanupWorktree tempDir
+                                            |> BackendTask.map (\() -> { baseDocs = baseDocs, baseReadme = baseReadme })
+                                    )
                         )
             )
 
@@ -293,16 +301,55 @@ cleanupWorktree tempDir =
 
 
 
+-- HELPERS
+
+
+readOptionalFile : String -> BackendTask FatalError (Maybe String)
+readOptionalFile path =
+    BackendTask.File.rawFile path
+        |> BackendTask.map Just
+        |> BackendTask.onError (\_ -> BackendTask.succeed Nothing)
+
+
+
 -- DIFF: COMPUTE
 
 
 computeDiff : String -> String -> BackendTask FatalError (Maybe ApiDiff)
 computeDiff baseDocsJson headDocsJson =
+    computeDiffWithReadme baseDocsJson headDocsJson Nothing Nothing
+
+
+computeDiffWithReadme : String -> String -> Maybe String -> Maybe String -> BackendTask FatalError (Maybe ApiDiff)
+computeDiffWithReadme baseDocsJson headDocsJson baseReadme headReadme =
+    let
+        readmeFields =
+            case ( baseReadme, headReadme ) of
+                ( Just br, Just hr ) ->
+                    [ ( "baseReadme", Encode.string br )
+                    , ( "headReadme", Encode.string hr )
+                    ]
+
+                ( Just br, Nothing ) ->
+                    [ ( "baseReadme", Encode.string br )
+                    , ( "headReadme", Encode.string "" )
+                    ]
+
+                ( Nothing, Just hr ) ->
+                    [ ( "baseReadme", Encode.string "" )
+                    , ( "headReadme", Encode.string hr )
+                    ]
+
+                ( Nothing, Nothing ) ->
+                    []
+    in
     BackendTask.Custom.run "computeDiff"
         (Encode.object
-            [ ( "baseDocs", Encode.string baseDocsJson )
-            , ( "headDocs", Encode.string headDocsJson )
-            ]
+            ([ ( "baseDocs", Encode.string baseDocsJson )
+             , ( "headDocs", Encode.string headDocsJson )
+             ]
+                ++ readmeFields
+            )
         )
         Diff.decoder
         |> BackendTask.quiet
@@ -320,7 +367,7 @@ renderOutput options maybeDiff modules =
             Script.log (Render.renderToc modules)
 
         ( Nothing, Just diff ) ->
-            Script.log (Render.renderTocWithDiff diff modules)
+            Script.log (Render.renderFullDiff diff modules)
 
         ( Just name, Nothing ) ->
             case findModule name modules of

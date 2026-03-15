@@ -4,6 +4,7 @@ module Docs.Render exposing
     , renderBinop
     , renderBlock
     , renderBlockWithDiff
+    , renderFullDiff
     , renderModule
     , renderModuleWithDiff
     , renderRemovedItem
@@ -642,26 +643,78 @@ renderTocWithDiff diff modules =
     banner ++ "\n\n" ++ header ++ "\n\n" ++ String.join "\n" (rows ++ removedRows) ++ "\n" ++ footer
 
 
-{-| Render a block with a diff status prefix marker.
+{-| Render a full diff view: magnitude banner, README diff, then each changed module expanded.
 -}
-renderBlockWithDiff : DiffStatus -> Docs.Block -> String
-renderBlockWithDiff status block =
+renderFullDiff : ApiDiff -> List Docs.Module -> String
+renderFullDiff diff modules =
+    let
+        banner =
+            magnitudeBanner diff.magnitude
+
+        readmeSection =
+            case diff.readmeDiff of
+                Just rdiff ->
+                    [ Ansi.Font.bold "── README ──" ++ "\n\n" ++ renderUnifiedDiff rdiff ]
+
+                Nothing ->
+                    []
+
+        changedModuleViews =
+            modules
+                |> List.filterMap
+                    (\mod ->
+                        case Diff.moduleStatus diff mod.name of
+                            ModuleUnchanged ->
+                                Nothing
+
+                            _ ->
+                                Just (renderModuleWithDiff diff mod)
+                    )
+
+        removedModuleViews =
+            List.map
+                (\name -> diffBadge Ansi.Color.red "-" ++ " " ++ Ansi.Font.bold (Ansi.Font.strikeThrough name))
+                diff.removedModules
+    in
+    banner ++ "\n\n" ++ String.join "\n\n" (readmeSection ++ changedModuleViews ++ removedModuleViews) ++ "\n"
+
+
+{-| Render a block with a diff status prefix marker and optional comment diff.
+-}
+renderBlockWithDiff : ApiDiff -> String -> DiffStatus -> Docs.Block -> String
+renderBlockWithDiff diff moduleName status block =
     let
         rendered =
             renderBlock block
+
+        badge =
+            case status of
+                Added ->
+                    diffBadge Ansi.Color.green "+" ++ " "
+
+                Changed ->
+                    diffBadge Ansi.Color.yellow "~" ++ " "
+
+                ModuleAdded ->
+                    diffBadge Ansi.Color.green "+" ++ " "
+
+                Unchanged ->
+                    ""
+
+        commentDiffSection =
+            case blockName block of
+                Just name ->
+                    case Diff.getCommentDiff diff moduleName name of
+                        Just cdiff ->
+                            "\n\n    " ++ Ansi.Font.bold "Doc changes:" ++ "\n" ++ indentUnifiedDiff cdiff
+
+                        Nothing ->
+                            ""
+
+                Nothing ->
+                    ""
     in
-    case status of
-        Added ->
-            diffBadge Ansi.Color.green "+" ++ " " ++ rendered
-
-        Changed ->
-            diffBadge Ansi.Color.yellow "~" ++ " " ++ rendered
-
-        ModuleAdded ->
-            diffBadge Ansi.Color.green "+" ++ " " ++ rendered
-
-        Unchanged ->
-            rendered
+    badge ++ rendered ++ commentDiffSection
 
 
 {-| Render a removed item (name only, with red strikethrough).
@@ -678,6 +731,50 @@ diffBadge color symbol =
     Ansi.Font.bold (Ansi.Color.backgroundColor color (Ansi.Color.fontColor Ansi.Color.black (" " ++ symbol ++ " ")))
 
 
+{-| Render a unified diff string with colored +/- lines.
+-}
+renderUnifiedDiff : String -> String
+renderUnifiedDiff diffText =
+    diffText
+        |> String.lines
+        |> List.map
+            (\line ->
+                if String.startsWith "+ " line then
+                    Ansi.Color.fontColor Ansi.Color.green line
+
+                else if String.startsWith "- " line then
+                    Ansi.Color.fontColor Ansi.Color.red line
+
+                else
+                    Ansi.Color.fontColor Ansi.Color.brightBlack line
+            )
+        |> String.join "\n"
+
+
+{-| Render a unified diff indented for display inside a block.
+-}
+indentUnifiedDiff : String -> String
+indentUnifiedDiff diffText =
+    diffText
+        |> String.lines
+        |> List.map
+            (\line ->
+                let
+                    colored =
+                        if String.startsWith "+ " line then
+                            Ansi.Color.fontColor Ansi.Color.green line
+
+                        else if String.startsWith "- " line then
+                            Ansi.Color.fontColor Ansi.Color.red line
+
+                        else
+                            Ansi.Color.fontColor Ansi.Color.brightBlack line
+                in
+                "      " ++ colored
+            )
+        |> String.join "\n"
+
+
 {-| Render a complete module view with diff markers on each block.
 -}
 renderModuleWithDiff : ApiDiff -> Docs.Module -> String
@@ -685,6 +782,14 @@ renderModuleWithDiff diff module_ =
     let
         header =
             Ansi.Font.bold ("── " ++ module_.name ++ " " ++ String.repeat (40 - String.length module_.name) "─")
+
+        moduleCommentSection =
+            case Diff.getModuleCommentDiff diff module_.name of
+                Just cdiff ->
+                    [ Ansi.Font.bold "  Module doc changes:" ++ "\n" ++ indentUnifiedDiff cdiff ]
+
+                Nothing ->
+                    []
 
         blocks =
             Block.toBlocks module_
@@ -696,13 +801,20 @@ renderModuleWithDiff diff module_ =
                         let
                             status =
                                 blockDiffStatus diff module_.name block
-                        in
-                        case status of
-                            Unchanged ->
-                                Nothing
 
-                            _ ->
-                                Just (renderBlockWithDiff status block)
+                            hasCommentDiff =
+                                case blockName block of
+                                    Just name ->
+                                        Diff.getCommentDiff diff module_.name name /= Nothing
+
+                                    Nothing ->
+                                        False
+                        in
+                        if status /= Unchanged || hasCommentDiff then
+                            Just (renderBlockWithDiff diff module_.name status block)
+
+                        else
+                            Nothing
                     )
 
         removedItems =
@@ -714,7 +826,7 @@ renderModuleWithDiff diff module_ =
                     []
 
         allParts =
-            changedBlocks ++ removedItems
+            moduleCommentSection ++ changedBlocks ++ removedItems
     in
     header ++ "\n\n" ++ String.join "\n\n" allParts ++ "\n"
 

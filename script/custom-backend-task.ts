@@ -219,7 +219,7 @@ function hasModuleDoc(contents: string): boolean {
 
 /**
  * Compute an API diff between two docs.json strings.
- * Pure function wrapper — all orchestration (worktrees, HTTP) is in Elm.
+ * Extends the base computeDiff with comment diffs for the TUI.
  */
 export async function computeDiff(
   rawInput: unknown,
@@ -228,9 +228,206 @@ export async function computeDiff(
   const input = rawInput as {
     baseDocs: string;
     headDocs: string;
+    baseReadme?: string;
+    headReadme?: string;
   };
 
   const baseDocs = JSON.parse(input.baseDocs);
   const headDocs = JSON.parse(input.headDocs);
-  return computeDiffLib(baseDocs, headDocs);
+  const apiDiff = computeDiffLib(baseDocs, headDocs);
+  if (!apiDiff) return null;
+
+  // Extend with comment diffs
+  const baseByName = new Map(
+    (baseDocs as DocsModule[]).map((m) => [m.name, m])
+  );
+  const headByName = new Map(
+    (headDocs as DocsModule[]).map((m) => [m.name, m])
+  );
+
+  const commentDiffs: Record<string, ItemCommentDiffs> = {};
+
+  for (const mc of apiDiff.changedModules) {
+    const baseMod = baseByName.get(mc.name);
+    const headMod = headByName.get(mc.name);
+    if (!baseMod || !headMod) continue;
+
+    const modDiffs: ItemCommentDiffs = {};
+
+    // Module-level comment diff
+    if (baseMod.comment !== headMod.comment) {
+      modDiffs["__module__"] = unifiedDiff(baseMod.comment, headMod.comment);
+    }
+
+    // Diff comments for changed items
+    for (const itemName of mc.changed) {
+      const baseComment = findItemComment(baseMod, itemName);
+      const headComment = findItemComment(headMod, itemName);
+      if (baseComment !== null && headComment !== null && baseComment !== headComment) {
+        modDiffs[itemName] = unifiedDiff(baseComment, headComment);
+      }
+    }
+
+    if (Object.keys(modDiffs).length > 0) {
+      commentDiffs[mc.name] = modDiffs;
+    }
+  }
+
+  // Also check for comment-only changes (items not in changed/added/removed)
+  for (const headMod of headDocs as DocsModule[]) {
+    const baseMod = baseByName.get(headMod.name);
+    if (!baseMod) continue;
+    // Skip if module is already tracked as changed
+    if (apiDiff.changedModules.some((mc) => mc.name === headMod.name)) {
+      // Check for items with only comment changes (not in changed list)
+      const mc = apiDiff.changedModules.find((c) => c.name === headMod.name)!;
+      const allTracked = new Set([...mc.added, ...mc.changed, ...mc.removed]);
+
+      for (const category of ["values", "unions", "aliases", "binops"] as const) {
+        for (const headItem of headMod[category] as { name: string; comment: string }[]) {
+          if (allTracked.has(headItem.name)) continue;
+          const baseItem = (baseMod[category] as { name: string; comment: string }[])
+            .find((b) => b.name === headItem.name);
+          if (baseItem && baseItem.comment !== headItem.comment) {
+            if (!commentDiffs[headMod.name]) commentDiffs[headMod.name] = {};
+            commentDiffs[headMod.name][headItem.name] = unifiedDiff(baseItem.comment, headItem.comment);
+          }
+        }
+      }
+
+      continue;
+    }
+    // Module not in changedModules — check for comment-only changes
+    if (baseMod.comment !== headMod.comment) {
+      if (!commentDiffs[headMod.name]) commentDiffs[headMod.name] = {};
+      commentDiffs[headMod.name]["__module__"] = unifiedDiff(baseMod.comment, headMod.comment);
+    }
+    for (const category of ["values", "unions", "aliases", "binops"] as const) {
+      for (const headItem of headMod[category] as { name: string; comment: string }[]) {
+        const baseItem = (baseMod[category] as { name: string; comment: string }[])
+          .find((b) => b.name === headItem.name);
+        if (baseItem && baseItem.comment !== headItem.comment) {
+          if (!commentDiffs[headMod.name]) commentDiffs[headMod.name] = {};
+          commentDiffs[headMod.name][headItem.name] = unifiedDiff(baseItem.comment, headItem.comment);
+        }
+      }
+    }
+  }
+
+  // README diff
+  let readmeDiff: string | null = null;
+  if (input.baseReadme !== undefined && input.headReadme !== undefined) {
+    if (input.baseReadme !== input.headReadme) {
+      readmeDiff = unifiedDiff(input.baseReadme || "", input.headReadme || "");
+    }
+  }
+
+  return {
+    ...apiDiff,
+    commentDiffs: Object.keys(commentDiffs).length > 0 ? commentDiffs : undefined,
+    readmeDiff: readmeDiff,
+  };
+}
+
+interface DocsModule {
+  name: string;
+  comment: string;
+  values: { name: string; comment: string; type: unknown }[];
+  unions: { name: string; comment: string; args: string[]; cases: unknown[] }[];
+  aliases: { name: string; comment: string; args: string[]; type: unknown }[];
+  binops: { name: string; comment: string; type: unknown; associativity: string; precedence: number }[];
+}
+
+type ItemCommentDiffs = Record<string, string>;
+
+function findItemComment(mod: DocsModule, itemName: string): string | null {
+  for (const v of mod.values) if (v.name === itemName) return v.comment;
+  for (const u of mod.unions) if (u.name === itemName) return u.comment;
+  for (const a of mod.aliases) if (a.name === itemName) return a.comment;
+  for (const b of mod.binops) if (b.name === itemName) return b.comment;
+  return null;
+}
+
+/**
+ * Simple line-based unified diff. Returns a string with +/- prefixed lines.
+ */
+function unifiedDiff(oldText: string, newText: string): string {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+
+  // Simple LCS-based diff
+  const lcs = longestCommonSubsequence(oldLines, newLines);
+  const result: string[] = [];
+
+  let oldIdx = 0;
+  let newIdx = 0;
+
+  for (const [lcsOldIdx, lcsNewIdx] of lcs) {
+    // Lines removed (in old but not matched)
+    while (oldIdx < lcsOldIdx) {
+      result.push("- " + oldLines[oldIdx]);
+      oldIdx++;
+    }
+    // Lines added (in new but not matched)
+    while (newIdx < lcsNewIdx) {
+      result.push("+ " + newLines[newIdx]);
+      newIdx++;
+    }
+    // Common line
+    result.push("  " + oldLines[oldIdx]);
+    oldIdx++;
+    newIdx++;
+  }
+
+  // Remaining removed
+  while (oldIdx < oldLines.length) {
+    result.push("- " + oldLines[oldIdx]);
+    oldIdx++;
+  }
+  // Remaining added
+  while (newIdx < newLines.length) {
+    result.push("+ " + newLines[newIdx]);
+    newIdx++;
+  }
+
+  return result.join("\n");
+}
+
+function longestCommonSubsequence(
+  a: string[],
+  b: string[]
+): [number, number][] {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    Array(n + 1).fill(0)
+  );
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to find the actual LCS indices
+  const result: [number, number][] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      result.push([i - 1, j - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  return result.reverse();
 }

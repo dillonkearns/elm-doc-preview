@@ -1,5 +1,6 @@
 module DiffTest exposing (suite)
 
+import Dict
 import Docs.Diff as Diff exposing (ApiDiff, DiffStatus(..), ModuleStatus(..))
 import Expect
 import Json.Decode as Decode
@@ -27,6 +28,8 @@ sampleDiff =
           , removed = [ "oldFn" ]
           }
         ]
+    , commentDiffs = Dict.empty
+    , readmeDiff = Nothing
     }
 
 
