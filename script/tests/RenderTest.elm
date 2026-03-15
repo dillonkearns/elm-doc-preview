@@ -17,6 +17,7 @@ suite =
         , binopRenderTests
         , tocTests
         , moduleRenderTests
+        , multiLineTypeTests
         ]
 
 
@@ -344,6 +345,103 @@ tocTests =
                         (result
                             |> String.contains "Second sentence here."
                             |> Expect.equal False
+                        )
+        ]
+
+
+multiLineTypeTests : Test
+multiLineTypeTests =
+    describe "multi-line type formatting"
+        [ test "short type stays on one line in renderValue" <|
+            \() ->
+                Render.renderValue
+                    { name = "id"
+                    , comment = "doc"
+                    , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+                    }
+                    |> String.contains "id"
+                    |> Expect.equal True
+        , test "long function type wraps across lines with arrows" <|
+            \() ->
+                let
+                    result =
+                        Render.renderValue
+                            { name = "makeInfo"
+                            , comment = "doc"
+                            , tipe =
+                                Type.Lambda (Type.Type "String.String" [])
+                                    (Type.Lambda (Type.Type "String.String" [])
+                                        (Type.Lambda (Type.Type "Maybe.Maybe" [ Type.Type "Elm.Version.Version" [] ])
+                                            (Type.Lambda (Type.Type "Maybe.Maybe" [ Type.Type "String.String" [] ])
+                                                (Type.Lambda (Type.Type "String.String" [])
+                                                    (Type.Type "Basics.Bool" [])
+                                                )
+                                            )
+                                        )
+                                    )
+                            }
+                in
+                result
+                    |> String.contains "-> String"
+                    |> Expect.equal True
+                    |> always
+                        (result
+                            |> String.contains "-> Maybe Version"
+                            |> Expect.equal True
+                        )
+        , test "long record type breaks per field" <|
+            \() ->
+                let
+                    result =
+                        Render.renderAlias
+                            { name = "Config"
+                            , comment = "doc"
+                            , args = []
+                            , tipe =
+                                Type.Record
+                                    [ ( "author", Type.Type "String.String" [] )
+                                    , ( "project", Type.Type "String.String" [] )
+                                    , ( "version", Type.Type "Maybe.Maybe" [ Type.Type "Elm.Version.Version" [] ] )
+                                    , ( "moduleName", Type.Type "String.String" [] )
+                                    ]
+                                    Nothing
+                            }
+                in
+                result
+                    |> String.contains ", project : String"
+                    |> Expect.equal True
+                    |> always
+                        (result
+                            |> String.contains "{ author : String"
+                            |> Expect.equal True
+                        )
+        , test "record arg in function type breaks per field" <|
+            \() ->
+                let
+                    result =
+                        Render.renderValue
+                            { name = "generate"
+                            , comment = "doc"
+                            , tipe =
+                                Type.Lambda (Type.Type "Config.Config" [])
+                                    (Type.Lambda
+                                        (Type.Record
+                                            [ ( "events", Type.Type "List.List" [ Type.Type "Event.Event" [] ] )
+                                            , ( "journals", Type.Type "List.List" [ Type.Type "Journal.Journal" [] ] )
+                                            ]
+                                            Nothing
+                                        )
+                                        (Type.Type "String.String" [])
+                                    )
+                            }
+                in
+                result
+                    |> String.contains "events"
+                    |> Expect.equal True
+                    |> always
+                        (result
+                            |> String.contains "journals"
+                            |> Expect.equal True
                         )
         ]
 

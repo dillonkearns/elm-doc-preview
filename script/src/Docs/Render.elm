@@ -1,12 +1,12 @@
 module Docs.Render exposing
-    ( typeToString
-    , renderValue
-    , renderUnion
-    , renderAlias
+    ( renderAlias
     , renderBinop
-    , renderToc
-    , renderModule
     , renderBlock
+    , renderModule
+    , renderToc
+    , renderUnion
+    , renderValue
+    , typeToString
     )
 
 import Ansi.Color

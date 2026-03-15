@@ -14,6 +14,7 @@ run =
         , moduleViewSnapshots
         , typeSignatureSnapshots
         , codeExampleSnapshots
+        , multiLineTypeSnapshots
         ]
 
 
@@ -195,5 +196,62 @@ codeExampleSnapshots =
                         , ( "ClickedButton", [ Type.Type "String.String" [] ] )
                         , ( "NoOp", [] )
                         ]
+                    }
+        ]
+
+
+multiLineTypeSnapshots : Snapshot.Test
+multiLineTypeSnapshots =
+    Snapshot.describe "Multi-line types"
+        [ Snapshot.test "long function signature wraps at arrows" <|
+            \() ->
+                Render.renderValue
+                    { name = "makeInfo"
+                    , comment = "Build info."
+                    , tipe =
+                        Type.Lambda (Type.Type "String.String" [])
+                            (Type.Lambda (Type.Type "String.String" [])
+                                (Type.Lambda (Type.Type "Maybe.Maybe" [ Type.Type "Elm.Version.Version" [] ])
+                                    (Type.Lambda (Type.Type "Maybe.Maybe" [ Type.Type "String.String" [] ])
+                                        (Type.Lambda (Type.Type "String.String" [])
+                                            (Type.Lambda (Type.Type "List.List" [ Type.Type "Elm.Docs.Module" [] ])
+                                                (Type.Type "Info.Info" [])
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                    }
+        , Snapshot.test "record type alias breaks per field" <|
+            \() ->
+                Render.renderAlias
+                    { name = "Info"
+                    , comment = "Info record."
+                    , args = []
+                    , tipe =
+                        Type.Record
+                            [ ( "author", Type.Type "String.String" [] )
+                            , ( "project", Type.Type "String.String" [] )
+                            , ( "version", Type.Type "Maybe.Maybe" [ Type.Type "Elm.Version.Version" [] ] )
+                            , ( "moduleName", Type.Type "String.String" [] )
+                            ]
+                            Nothing
+                    }
+        , Snapshot.test "function with record arg wraps" <|
+            \() ->
+                Render.renderValue
+                    { name = "generateWithJournals"
+                    , comment = "Generate output."
+                    , tipe =
+                        Type.Lambda (Type.Type "Config.Config" [])
+                            (Type.Lambda
+                                (Type.Record
+                                    [ ( "events", Type.Type "List.List" [ Type.Type "Event.Event" [] ] )
+                                    , ( "journals", Type.Type "List.List" [ Type.Type "Journal.Journal" [] ] )
+                                    ]
+                                    Nothing
+                                )
+                                (Type.Type "String.String" [])
+                            )
                     }
         ]

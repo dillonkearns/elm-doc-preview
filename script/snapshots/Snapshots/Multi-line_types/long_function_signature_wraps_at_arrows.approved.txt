@@ -1,0 +1,10 @@
+  [1mmakeInfo[22m :
+      [36mString[39m
+      [36m    -> String[39m
+      [36m    -> Maybe Version[39m
+      [36m    -> Maybe String[39m
+      [36m    -> String[39m
+      [36m    -> List Module[39m
+      [36m    -> Info[39m
+
+    Build info.

@@ -1,0 +1,8 @@
+  [1mtype alias Info[22m =
+      { author : String
+      , project : String
+      , version : Maybe Version
+      , moduleName : String
+      }
+
+    Info record.

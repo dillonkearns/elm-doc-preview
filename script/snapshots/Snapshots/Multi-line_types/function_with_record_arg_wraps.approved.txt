@@ -1,0 +1,6 @@
+  [1mgenerateWithJournals[22m :
+      [36mConfig[39m
+      [36m    -> { events : List Event, journals : List Journal }[39m
+      [36m    -> String[39m
+
+    Generate output.
