@@ -1,0 +1,9 @@
+[1m── Guide ───────────────────────────────────[22m
+
+[1mGetting Started[22m
+
+This module helps you get started.
+
+[1mInstallation[22m
+
+Run the install command.

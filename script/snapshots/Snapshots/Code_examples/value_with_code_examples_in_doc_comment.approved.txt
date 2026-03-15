@@ -1,0 +1,10 @@
+  [1mmap[22m : [36m(a -> b) -> List a -> List b[39m
+
+    Apply a function to every element of a list.
+
+    [2mmap sqrt [1, 4, 9]  ==  [1, 2, 3][22m
+
+    [2mmap not [True, False]  ==  [False, True][22m
+
+    So `map func [ a, b, c ]` is the same as
+    `[ func a, func b, func c ]`

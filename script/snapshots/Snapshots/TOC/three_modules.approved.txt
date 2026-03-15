@@ -1,0 +1,7 @@
+[1m── Modules ──[22m
+
+  [1mList[22m    Manipulate lists of values.
+  [1mDict[22m    A dictionary mapping unique keys to values.
+  [1mString[22m  A built-in representation for efficient string manipulation.
+
+Use --module <name> to view a module's docs.

@@ -7,6 +7,10 @@ lib/elm-doc-server.js
 lib/elm-doc-server.js.map
 lib/elm-doc-server.d.ts
 lib/version.js
+lib/elm-docs-tui.mjs
+script/.elm-pages/
+script/elm-stuff/
+script/snapshots/**/*.received.txt
 *.swp
 *.swo
 *~

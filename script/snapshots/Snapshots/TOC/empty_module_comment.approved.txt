@@ -1,0 +1,5 @@
+[1m── Modules ──[22m
+
+  [1mInternal[22m  
+
+Use --module <name> to view a module's docs.

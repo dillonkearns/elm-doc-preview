@@ -1,0 +1,27 @@
+[1m── MyModule ────────────────────────────────[22m
+
+A module for working with data.
+
+  [1midentity[22m : [36ma -> a[39m
+
+    Return the argument unchanged.
+
+    [2midentity 5 == 5[22m
+    [2midentity "hello" == "hello"[22m
+
+  [1mtype Color[22m
+      = Red
+      | Green
+      | Blue
+
+    Represents a color.
+
+  [1mtype alias Point[22m =
+      { x : Float, y : Float }
+
+    A two-dimensional point.
+
+  [1m(+)[22m : [36mnumber -> number -> number[39m
+    left-associative, precedence 6
+
+    Add two numbers.

@@ -1,0 +1,6 @@
+  [1mtype Msg[22m
+      = GotResponse (Result Error String)
+      | ClickedButton String
+      | NoOp
+
+    Messages for the application.

@@ -2,7 +2,8 @@
   "author": "Rémi Lefèvre <rlefevre@gmail.com>",
   "bin": {
     "edp": "cli.js",
-    "elm-doc-preview": "cli.js"
+    "elm-doc-preview": "cli.js",
+    "elm-doc": "lib/elm-docs-tui.mjs"
   },
   "bugs": {
     "url": "https://github.com/dmy/elm-doc-preview/issues"

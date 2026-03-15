@@ -1,0 +1,12 @@
+simple: Int
+function: a -> b
+multi-arg: String -> Int -> Bool
+parameterized: Maybe a
+nested: List (Maybe a)
+record: { x : Float, y : Float }
+extensible record: { a | x : Int }
+tuple: ( a, b )
+unit: ()
+complex nested: Result (List String) (Maybe Int)
+lambda in app context: List (a -> b)
+deeply nested: (a -> b) -> List a -> List b
