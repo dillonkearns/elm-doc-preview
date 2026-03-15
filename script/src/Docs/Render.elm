@@ -21,6 +21,11 @@ import Markdown.Renderer exposing (Renderer)
 import SyntaxHighlight
 
 
+maxWidth : Int
+maxWidth =
+    64
+
+
 {-| Convert an Elm Type to a readable string, handling parenthesization.
 -}
 typeToString : Type.Type -> String
@@ -134,6 +139,111 @@ toShortName qualifiedName =
 
 
 
+-- MULTI-LINE TYPE FORMATTING
+
+
+{-| Format a type signature with line breaks when it exceeds maxWidth.
+Returns a list of lines. The first line is meant to follow " : " on the
+name line. Subsequent lines are indented.
+-}
+typeToLines : Int -> Type.Type -> List String
+typeToLines prefixWidth tipe =
+    let
+        oneLine =
+            typeToString tipe
+    in
+    if prefixWidth + String.length oneLine <= maxWidth then
+        [ oneLine ]
+
+    else
+        typeToMultiLines "    " tipe
+
+
+typeToMultiLines : String -> Type.Type -> List String
+typeToMultiLines indent tipe =
+    case tipe of
+        Type.Lambda arg result ->
+            let
+                allArgs =
+                    collectLambdaArgs arg result
+
+                renderArg i argType =
+                    let
+                        argStr =
+                            typeToStringHelp (isLambda argType) argType
+
+                        prefix =
+                            if i == 0 then
+                                ""
+
+                            else
+                                indent ++ "-> "
+                    in
+                    if String.length prefix + String.length argStr <= maxWidth then
+                        [ prefix ++ argStr ]
+
+                    else
+                        case argType of
+                            Type.Record fields ext ->
+                                multiLineRecord (prefix ++ "{ ") (indent ++ "   ") fields ext
+
+                            _ ->
+                                [ prefix ++ argStr ]
+            in
+            List.indexedMap renderArg allArgs
+                |> List.concat
+
+        Type.Record fields ext ->
+            multiLineRecord "{ " indent fields ext
+
+        _ ->
+            [ typeToString tipe ]
+
+
+collectLambdaArgs : Type.Type -> Type.Type -> List Type.Type
+collectLambdaArgs arg result =
+    case result of
+        Type.Lambda nextArg nextResult ->
+            arg :: collectLambdaArgs nextArg nextResult
+
+        _ ->
+            [ arg, result ]
+
+
+multiLineRecord : String -> String -> List ( String, Type.Type ) -> Maybe String -> List String
+multiLineRecord openPrefix indent fields extension =
+    case fields of
+        [] ->
+            case extension of
+                Nothing ->
+                    [ "{}" ]
+
+                Just ext ->
+                    [ "{ " ++ ext ++ " | }" ]
+
+        first :: rest ->
+            let
+                extPrefix =
+                    case extension of
+                        Nothing ->
+                            openPrefix
+
+                        Just ext ->
+                            "{ " ++ ext ++ " | "
+
+                firstLine =
+                    extPrefix ++ fieldToString first
+
+                restLines =
+                    List.map (\f -> ", " ++ fieldToString f) rest
+
+                closeLine =
+                    "}"
+            in
+            firstLine :: restLines ++ [ closeLine ]
+
+
+
 -- VALUE RENDERING
 
 
@@ -142,8 +252,19 @@ toShortName qualifiedName =
 renderValue : Docs.Value -> String
 renderValue { name, comment, tipe } =
     let
+        prefixWidth =
+            String.length name + 3
+
         header =
-            "  " ++ Ansi.Font.bold name ++ " : " ++ Ansi.Color.fontColor Ansi.Color.cyan (typeToString tipe)
+            case typeToLines prefixWidth tipe of
+                [ oneLine ] ->
+                    "  " ++ Ansi.Font.bold name ++ " : " ++ Ansi.Color.fontColor Ansi.Color.cyan oneLine
+
+                multipleLines ->
+                    multipleLines
+                        |> List.map (\line -> "      " ++ Ansi.Color.fontColor Ansi.Color.cyan line)
+                        |> String.join "\n"
+                        |> (\typeStr -> "  " ++ Ansi.Font.bold name ++ " :\n" ++ typeStr)
 
         body =
             indentComment comment
@@ -219,7 +340,14 @@ renderAlias { name, comment, args, tipe } =
             "  " ++ Ansi.Font.bold ("type alias " ++ name ++ typeVars) ++ " ="
 
         typeBody =
-            "      " ++ typeToString tipe
+            case typeToLines 6 tipe of
+                [ oneLine ] ->
+                    "      " ++ oneLine
+
+                multipleLines ->
+                    multipleLines
+                        |> List.map (\line -> "      " ++ line)
+                        |> String.join "\n"
 
         body =
             indentComment comment
@@ -236,11 +364,22 @@ renderAlias { name, comment, args, tipe } =
 renderBinop : Docs.Binop -> String
 renderBinop { name, comment, tipe, associativity, precedence } =
     let
+        displayName =
+            "(" ++ name ++ ")"
+
+        prefixWidth =
+            String.length displayName + 3
+
         header =
-            "  "
-                ++ Ansi.Font.bold ("(" ++ name ++ ")")
-                ++ " : "
-                ++ Ansi.Color.fontColor Ansi.Color.cyan (typeToString tipe)
+            case typeToLines prefixWidth tipe of
+                [ oneLine ] ->
+                    "  " ++ Ansi.Font.bold displayName ++ " : " ++ Ansi.Color.fontColor Ansi.Color.cyan oneLine
+
+                multipleLines ->
+                    multipleLines
+                        |> List.map (\line -> "      " ++ Ansi.Color.fontColor Ansi.Color.cyan line)
+                        |> String.join "\n"
+                        |> (\typeStr -> "  " ++ Ansi.Font.bold displayName ++ " :\n" ++ typeStr)
 
         assocStr =
             case associativity of
