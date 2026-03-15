@@ -85,13 +85,14 @@ buildDocs : CliOptions -> ElmJson -> BackendTask FatalError ()
 buildDocs options elmJson =
     case elmJson.projectType of
         "package" ->
-            Do.exec "elm"
-                [ "make", "--docs=docs.json" ]
-                (\() ->
-                    BackendTask.File.rawFile "docs.json"
-                        |> BackendTask.allowFatal
-                        |> BackendTask.andThen (decodeAndRender options)
-                )
+            Script.exec "elm" [ "make", "--docs=docs.json" ]
+                |> BackendTask.quiet
+                |> BackendTask.andThen
+                    (\() ->
+                        BackendTask.File.rawFile "docs.json"
+                            |> BackendTask.allowFatal
+                            |> BackendTask.andThen (decodeAndRender options)
+                    )
 
         _ ->
             buildApplicationDocs options elmJson
@@ -115,6 +116,7 @@ buildApplicationDocs options elmJson =
     BackendTask.Custom.run "buildApplicationDocs"
         input
         Decode.string
+        |> BackendTask.quiet
         |> BackendTask.allowFatal
         |> BackendTask.andThen (decodeAndRender options)
 
