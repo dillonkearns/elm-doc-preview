@@ -349,45 +349,84 @@ function findItemComment(mod: DocsModule, itemName: string): string | null {
 }
 
 /**
- * Simple line-based unified diff. Returns a string with +/- prefixed lines.
+ * Line-based unified diff with limited context (3 lines around changes).
+ * Returns a string with +/- prefixed lines, context lines, and ... separators.
  */
-function unifiedDiff(oldText: string, newText: string): string {
+function unifiedDiff(
+  oldText: string,
+  newText: string,
+  contextLines: number = 3
+): string {
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
 
-  // Simple LCS-based diff
+  // Build full diff with line types
   const lcs = longestCommonSubsequence(oldLines, newLines);
-  const result: string[] = [];
+  const fullDiff: { type: "add" | "remove" | "context"; text: string }[] = [];
 
   let oldIdx = 0;
   let newIdx = 0;
 
   for (const [lcsOldIdx, lcsNewIdx] of lcs) {
-    // Lines removed (in old but not matched)
     while (oldIdx < lcsOldIdx) {
-      result.push("- " + oldLines[oldIdx]);
+      fullDiff.push({ type: "remove", text: oldLines[oldIdx] });
       oldIdx++;
     }
-    // Lines added (in new but not matched)
     while (newIdx < lcsNewIdx) {
-      result.push("+ " + newLines[newIdx]);
+      fullDiff.push({ type: "add", text: newLines[newIdx] });
       newIdx++;
     }
-    // Common line
-    result.push("  " + oldLines[oldIdx]);
+    fullDiff.push({ type: "context", text: oldLines[oldIdx] });
     oldIdx++;
+    newIdx++;
+  }
+  while (oldIdx < oldLines.length) {
+    fullDiff.push({ type: "remove", text: oldLines[oldIdx] });
+    oldIdx++;
+  }
+  while (newIdx < newLines.length) {
+    fullDiff.push({ type: "add", text: newLines[newIdx] });
     newIdx++;
   }
 
-  // Remaining removed
-  while (oldIdx < oldLines.length) {
-    result.push("- " + oldLines[oldIdx]);
-    oldIdx++;
+  // Find which lines are "changed" (add or remove)
+  const changedIndices = new Set<number>();
+  fullDiff.forEach((line, i) => {
+    if (line.type !== "context") changedIndices.add(i);
+  });
+
+  // Mark which lines to include (changed lines + context around them)
+  const includeIndices = new Set<number>();
+  for (const idx of changedIndices) {
+    for (
+      let i = Math.max(0, idx - contextLines);
+      i <= Math.min(fullDiff.length - 1, idx + contextLines);
+      i++
+    ) {
+      includeIndices.add(i);
+    }
   }
-  // Remaining added
-  while (newIdx < newLines.length) {
-    result.push("+ " + newLines[newIdx]);
-    newIdx++;
+
+  // Build output with ... separators for gaps
+  const result: string[] = [];
+  let lastIncluded = -2;
+
+  for (let i = 0; i < fullDiff.length; i++) {
+    if (!includeIndices.has(i)) continue;
+
+    if (lastIncluded >= 0 && i > lastIncluded + 1) {
+      result.push("  ...");
+    }
+    lastIncluded = i;
+
+    const line = fullDiff[i];
+    if (line.type === "add") {
+      result.push("+ " + line.text);
+    } else if (line.type === "remove") {
+      result.push("- " + line.text);
+    } else {
+      result.push("  " + line.text);
+    }
   }
 
   return result.join("\n");

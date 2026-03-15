@@ -737,17 +737,7 @@ renderUnifiedDiff : String -> String
 renderUnifiedDiff diffText =
     diffText
         |> String.lines
-        |> List.map
-            (\line ->
-                if String.startsWith "+ " line then
-                    Ansi.Color.fontColor Ansi.Color.green line
-
-                else if String.startsWith "- " line then
-                    Ansi.Color.fontColor Ansi.Color.red line
-
-                else
-                    Ansi.Color.fontColor Ansi.Color.brightBlack line
-            )
+        |> List.map colorDiffLine
         |> String.join "\n"
 
 
@@ -757,22 +747,20 @@ indentUnifiedDiff : String -> String
 indentUnifiedDiff diffText =
     diffText
         |> String.lines
-        |> List.map
-            (\line ->
-                let
-                    colored =
-                        if String.startsWith "+ " line then
-                            Ansi.Color.fontColor Ansi.Color.green line
-
-                        else if String.startsWith "- " line then
-                            Ansi.Color.fontColor Ansi.Color.red line
-
-                        else
-                            Ansi.Color.fontColor Ansi.Color.brightBlack line
-                in
-                "      " ++ colored
-            )
+        |> List.map (\line -> "      " ++ colorDiffLine line)
         |> String.join "\n"
+
+
+colorDiffLine : String -> String
+colorDiffLine line =
+    if String.startsWith "+ " line then
+        Ansi.Color.fontColor Ansi.Color.green line
+
+    else if String.startsWith "- " line then
+        Ansi.Color.fontColor Ansi.Color.red line
+
+    else
+        Ansi.Color.fontColor Ansi.Color.brightBlack line
 
 
 {-| Render a complete module view with diff markers on each block.
