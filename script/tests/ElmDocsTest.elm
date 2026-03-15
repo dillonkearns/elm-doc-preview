@@ -93,6 +93,94 @@ suite =
                                 |> String.contains "NonExistent"
                                 |> Expect.equal True
                         )
+        , test "Diff mode: --diff with refs shows diff TOC with magnitude banner" <|
+            \() ->
+                Test.BackendTask.fromScriptWith
+                    (Test.BackendTask.init
+                        |> Test.BackendTask.withFile "elm.json" fixturePackageElmJson
+                        |> Test.BackendTask.withFile "docs.json" fixtureDocsJson
+                    )
+                    [ "--diff", "base..head" ]
+                    ElmDocs.run
+                    |> Test.BackendTask.simulateCommand "elm" ""
+                    |> Test.BackendTask.simulateCustom "computeApiDiff" fixtureDiffJson
+                    |> Test.BackendTask.ensureOutputWith
+                        (\outputs ->
+                            let
+                                allOutput =
+                                    outputs
+                                        |> List.filterMap
+                                            (\output ->
+                                                case output of
+                                                    Test.BackendTask.Stdout s ->
+                                                        Just s
+
+                                                    _ ->
+                                                        Nothing
+                                            )
+                                        |> String.join "\n"
+                            in
+                            Expect.all
+                                [ \s -> s |> String.contains "MINOR CHANGE" |> Expect.equal True
+                                , \s -> s |> String.contains "MyModule" |> Expect.equal True
+                                , \s -> s |> String.contains "OtherModule" |> Expect.equal True
+                                ]
+                                allOutput
+                        )
+                    |> Test.BackendTask.expectSuccess
+        , test "Diff mode: --diff with module shows diff-annotated module view" <|
+            \() ->
+                Test.BackendTask.fromScriptWith
+                    (Test.BackendTask.init
+                        |> Test.BackendTask.withFile "elm.json" fixturePackageElmJson
+                        |> Test.BackendTask.withFile "docs.json" fixtureDocsJson
+                    )
+                    [ "--diff", "base..head", "--module", "MyModule" ]
+                    ElmDocs.run
+                    |> Test.BackendTask.simulateCommand "elm" ""
+                    |> Test.BackendTask.simulateCustom "computeApiDiff" fixtureDiffJson
+                    |> Test.BackendTask.ensureOutputWith
+                        (\outputs ->
+                            let
+                                allOutput =
+                                    outputs
+                                        |> List.filterMap
+                                            (\output ->
+                                                case output of
+                                                    Test.BackendTask.Stdout s ->
+                                                        Just s
+
+                                                    _ ->
+                                                        Nothing
+                                            )
+                                        |> String.join "\n"
+                            in
+                            Expect.all
+                                [ \s -> s |> String.contains "MyModule" |> Expect.equal True
+                                , \s -> s |> String.contains "identity" |> Expect.equal True
+                                ]
+                                allOutput
+                        )
+                    |> Test.BackendTask.expectSuccess
+        ]
+
+
+fixtureDiffJson : Encode.Value
+fixtureDiffJson =
+    Encode.object
+        [ ( "magnitude", Encode.string "MINOR" )
+        , ( "addedModules", Encode.list Encode.string [ "OtherModule" ] )
+        , ( "removedModules", Encode.list Encode.string [] )
+        , ( "changedModules"
+          , Encode.list identity
+                [ Encode.object
+                    [ ( "name", Encode.string "MyModule" )
+                    , ( "added", Encode.list Encode.string [ "identity" ] )
+                    , ( "changed", Encode.list Encode.string [] )
+                    , ( "removed", Encode.list Encode.string [] )
+                    ]
+                ]
+          )
         ]
 
 

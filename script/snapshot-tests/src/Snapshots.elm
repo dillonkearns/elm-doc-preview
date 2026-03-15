@@ -1,5 +1,6 @@
 module Snapshots exposing (run)
 
+import Docs.Diff as Diff
 import Docs.Render as Render
 import Elm.Docs as Docs
 import Elm.Type as Type
@@ -15,6 +16,7 @@ run =
         , typeSignatureSnapshots
         , codeExampleSnapshots
         , multiLineTypeSnapshots
+        , diffSnapshots
         ]
 
 
@@ -253,5 +255,89 @@ multiLineTypeSnapshots =
                                 )
                                 (Type.Type "String.String" [])
                             )
+                    }
+        ]
+
+
+snapshotDiff : Diff.ApiDiff
+snapshotDiff =
+    { magnitude = "MINOR"
+    , addedModules = [ "NewModule" ]
+    , removedModules = [ "RemovedModule" ]
+    , changedModules =
+        [ { name = "ChangedModule"
+          , added = [ "newHelper" ]
+          , changed = [ "map" ]
+          , removed = [ "oldFn" ]
+          }
+        ]
+    }
+
+
+diffSnapshots : Snapshot.Test
+diffSnapshots =
+    Snapshot.describe "Diff"
+        [ Snapshot.test "MAJOR magnitude banner" <|
+            \() ->
+                Render.magnitudeBanner "MAJOR"
+        , Snapshot.test "MINOR magnitude banner" <|
+            \() ->
+                Render.magnitudeBanner "MINOR"
+        , Snapshot.test "PATCH magnitude banner" <|
+            \() ->
+                Render.magnitudeBanner "PATCH"
+        , Snapshot.test "TOC with MINOR diff" <|
+            \() ->
+                Render.renderTocWithDiff snapshotDiff
+                    [ { name = "NewModule"
+                      , comment = "A newly added module.\n\n@docs something"
+                      , unions = []
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    , { name = "ChangedModule"
+                      , comment = "This module has changes.\n\n@docs map, newHelper"
+                      , unions = []
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    , { name = "UnchangedModule"
+                      , comment = "No changes here.\n\n@docs stable"
+                      , unions = []
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    ]
+        , Snapshot.test "module view with mixed diff items" <|
+            \() ->
+                Render.renderModuleWithDiff snapshotDiff
+                    { name = "ChangedModule"
+                    , comment = "A module with changes.\n\n@docs map, newHelper, stable"
+                    , unions = []
+                    , aliases = []
+                    , values =
+                        [ { name = "map"
+                          , comment = "Map over things."
+                          , tipe =
+                                Type.Lambda
+                                    (Type.Lambda (Type.Var "a") (Type.Var "b"))
+                                    (Type.Lambda
+                                        (Type.Type "List.List" [ Type.Var "a" ])
+                                        (Type.Type "List.List" [ Type.Var "b" ])
+                                    )
+                          }
+                        , { name = "newHelper"
+                          , comment = "A new helper function."
+                          , tipe = Type.Lambda (Type.Type "String.String" []) (Type.Type "Basics.Int" [])
+                          }
+                        , { name = "stable"
+                          , comment = "An unchanged function."
+                          , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+                          }
+                        ]
+                    , binops = []
                     }
         ]

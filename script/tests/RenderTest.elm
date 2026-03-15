@@ -1,5 +1,6 @@
 module RenderTest exposing (suite)
 
+import Docs.Diff as Diff exposing (DiffStatus(..))
 import Docs.Render as Render
 import Elm.Docs as Docs
 import Elm.Type as Type
@@ -18,6 +19,7 @@ suite =
         , tocTests
         , moduleRenderTests
         , multiLineTypeTests
+        , diffRenderTests
         ]
 
 
@@ -510,4 +512,200 @@ moduleRenderTests =
                             |> String.contains "Some more text."
                             |> Expect.equal True
                         )
+        ]
+
+
+sampleDiff : Diff.ApiDiff
+sampleDiff =
+    { magnitude = "MINOR"
+    , addedModules = [ "NewModule" ]
+    , removedModules = [ "RemovedModule" ]
+    , changedModules =
+        [ { name = "ChangedModule"
+          , added = [ "newHelper" ]
+          , changed = [ "map" ]
+          , removed = [ "oldFn" ]
+          }
+        ]
+    }
+
+
+diffRenderTests : Test
+diffRenderTests =
+    describe "diff-aware rendering"
+        [ describe "magnitudeBanner"
+            [ test "MAJOR banner contains MAJOR CHANGE in red" <|
+                \() ->
+                    let
+                        result =
+                            Render.magnitudeBanner "MAJOR"
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "MAJOR CHANGE" |> Expect.equal True
+                        , \s -> s |> String.contains "[31m" |> Expect.equal True
+                        ]
+                        result
+            , test "MINOR banner contains MINOR CHANGE in green" <|
+                \() ->
+                    let
+                        result =
+                            Render.magnitudeBanner "MINOR"
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "MINOR CHANGE" |> Expect.equal True
+                        , \s -> s |> String.contains "[32m" |> Expect.equal True
+                        ]
+                        result
+            , test "PATCH banner contains PATCH CHANGE in cyan" <|
+                \() ->
+                    let
+                        result =
+                            Render.magnitudeBanner "PATCH"
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "PATCH CHANGE" |> Expect.equal True
+                        , \s -> s |> String.contains "[36m" |> Expect.equal True
+                        ]
+                        result
+            ]
+        , describe "renderBlockWithDiff"
+            [ test "Added value has green + prefix" <|
+                \() ->
+                    let
+                        block =
+                            Docs.ValueBlock
+                                { name = "newFn"
+                                , comment = "A new function."
+                                , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+                                }
+
+                        result =
+                            Render.renderBlockWithDiff Added block
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "+" |> Expect.equal True
+                        , \s -> s |> String.contains "[32m" |> Expect.equal True
+                        ]
+                        result
+            , test "Changed value has yellow ~ prefix" <|
+                \() ->
+                    let
+                        block =
+                            Docs.ValueBlock
+                                { name = "map"
+                                , comment = "Map over things."
+                                , tipe = Type.Lambda (Type.Var "a") (Type.Var "b")
+                                }
+
+                        result =
+                            Render.renderBlockWithDiff Changed block
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "~" |> Expect.equal True
+                        , \s -> s |> String.contains "[33m" |> Expect.equal True
+                        ]
+                        result
+            , test "Unchanged value has no prefix marker" <|
+                \() ->
+                    let
+                        block =
+                            Docs.ValueBlock
+                                { name = "identity"
+                                , comment = "Return the argument."
+                                , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+                                }
+
+                        result =
+                            Render.renderBlockWithDiff Unchanged block
+                    in
+                    result
+                        |> String.startsWith "  "
+                        |> Expect.equal True
+            ]
+        , describe "renderRemovedItem"
+            [ test "renders removed item with red - and strikethrough" <|
+                \() ->
+                    let
+                        result =
+                            Render.renderRemovedItem "oldFn"
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "-" |> Expect.equal True
+                        , \s -> s |> String.contains "oldFn" |> Expect.equal True
+                        , \s -> s |> String.contains "[31m" |> Expect.equal True
+                        , \s -> s |> String.contains "[9m" |> Expect.equal True
+                        ]
+                        result
+            ]
+        , describe "renderTocWithDiff"
+            [ test "TOC shows diff markers for added, changed, removed modules" <|
+                \() ->
+                    let
+                        modules =
+                            [ { name = "NewModule"
+                              , comment = "A newly added module."
+                              , unions = []
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            , { name = "ChangedModule"
+                              , comment = "This module has changes."
+                              , unions = []
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            , { name = "UnchangedModule"
+                              , comment = "No changes here."
+                              , unions = []
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+
+                        result =
+                            Render.renderTocWithDiff sampleDiff modules
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "MINOR CHANGE" |> Expect.equal True
+                        , \s -> s |> String.contains "+ " |> Expect.equal True
+                        , \s -> s |> String.contains "~ " |> Expect.equal True
+                        , \s -> s |> String.contains "- " |> Expect.equal True
+                        , \s -> s |> String.contains "RemovedModule" |> Expect.equal True
+                        ]
+                        result
+            ]
+        , describe "renderModuleWithDiff"
+            [ test "module view annotates items with diff markers and appends removed items" <|
+                \() ->
+                    let
+                        module_ =
+                            { name = "ChangedModule"
+                            , comment = "A module.\n\n@docs map, newHelper"
+                            , unions = []
+                            , aliases = []
+                            , values =
+                                [ { name = "map"
+                                  , comment = "Map function."
+                                  , tipe = Type.Lambda (Type.Var "a") (Type.Var "b")
+                                  }
+                                , { name = "newHelper"
+                                  , comment = "A new helper."
+                                  , tipe = Type.Type "Basics.Int" []
+                                  }
+                                ]
+                            , binops = []
+                            }
+
+                        result =
+                            Render.renderModuleWithDiff sampleDiff module_
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "ChangedModule" |> Expect.equal True
+                        , \s -> s |> String.contains "oldFn" |> Expect.equal True
+                        ]
+                        result
+            ]
         ]

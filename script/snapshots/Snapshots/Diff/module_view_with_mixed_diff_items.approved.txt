@@ -1,0 +1,21 @@
+[1m── ChangedModule ───────────────────────────[22m
+
+A module with changes.
+
+
+[33m~[39m [1mmap[22m : [36m(a -> b) -> List a -> List b[39m
+
+    Map over things.
+
+
+[32m+[39m [1mnewHelper[22m : [36mString -> Int[39m
+
+    A new helper function.
+
+
+  [1mstable[22m : [36ma -> a[39m
+
+    An unchanged function.
+
+
+[31m- [9moldFn[29m[39m

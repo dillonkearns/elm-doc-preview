@@ -1,9 +1,14 @@
 module Docs.Render exposing
-    ( renderAlias
+    ( magnitudeBanner
+    , renderAlias
     , renderBinop
     , renderBlock
+    , renderBlockWithDiff
     , renderModule
+    , renderModuleWithDiff
+    , renderRemovedItem
     , renderToc
+    , renderTocWithDiff
     , renderUnion
     , renderValue
     , typeToString
@@ -12,6 +17,7 @@ module Docs.Render exposing
 import Ansi.Color
 import Ansi.Font
 import Docs.Block as Block
+import Docs.Diff as Diff exposing (ApiDiff, DiffStatus(..), ModuleStatus(..))
 import Elm.Docs as Docs
 import Elm.Type as Type
 import Markdown.Block exposing (ListItem(..), Task(..))
@@ -537,6 +543,213 @@ renderBlock block =
 
         Docs.UnknownBlock name ->
             "  (unknown: " ++ name ++ ")"
+
+
+
+-- DIFF-AWARE RENDERING
+
+
+{-| Render a magnitude banner like: ── MINOR CHANGE ──────────────
+-}
+magnitudeBanner : String -> String
+magnitudeBanner magnitude =
+    let
+        color =
+            case magnitude of
+                "MAJOR" ->
+                    Ansi.Color.red
+
+                "MINOR" ->
+                    Ansi.Color.green
+
+                "PATCH" ->
+                    Ansi.Color.cyan
+
+                _ ->
+                    Ansi.Color.white
+
+        label =
+            magnitude ++ " CHANGE "
+
+        padding =
+            String.repeat (max 0 (40 - 3 - String.length label)) "─"
+    in
+    Ansi.Font.bold (Ansi.Color.fontColor color ("── " ++ label ++ padding))
+
+
+{-| Render a TOC with diff markers showing module add/change/remove status.
+-}
+renderTocWithDiff : ApiDiff -> List Docs.Module -> String
+renderTocWithDiff diff modules =
+    let
+        allNames =
+            List.map .name modules ++ diff.removedModules
+
+        maxNameLen =
+            allNames
+                |> List.map String.length
+                |> List.maximum
+                |> Maybe.withDefault 0
+
+        renderRow mod =
+            let
+                status =
+                    Diff.moduleStatus diff mod.name
+
+                padding =
+                    String.repeat (maxNameLen - String.length mod.name + 2) " "
+
+                summary =
+                    firstSentence mod.comment
+            in
+            case status of
+                ModuleNew ->
+                    Ansi.Color.fontColor Ansi.Color.green ("+ " ++ Ansi.Font.bold mod.name ++ padding ++ summary)
+
+                ModuleChanged ->
+                    Ansi.Color.fontColor Ansi.Color.yellow ("~ " ++ Ansi.Font.bold mod.name ++ padding ++ summary)
+
+                _ ->
+                    "  " ++ Ansi.Font.bold mod.name ++ padding ++ summary
+
+        renderRemovedRow name =
+            let
+                padding =
+                    String.repeat (maxNameLen - String.length name + 2) " "
+            in
+            Ansi.Color.fontColor Ansi.Color.red ("- " ++ Ansi.Font.strikeThrough name ++ padding)
+
+        rows =
+            List.map renderRow modules
+
+        removedRows =
+            List.map renderRemovedRow diff.removedModules
+
+        banner =
+            magnitudeBanner diff.magnitude
+
+        header =
+            Ansi.Font.bold "── Modules ──"
+
+        footer =
+            "\nUse --module <name> to view a module's docs."
+    in
+    banner ++ "\n\n" ++ header ++ "\n\n" ++ String.join "\n" (rows ++ removedRows) ++ "\n" ++ footer
+
+
+{-| Render a block with a diff status prefix marker.
+-}
+renderBlockWithDiff : DiffStatus -> Docs.Block -> String
+renderBlockWithDiff status block =
+    let
+        rendered =
+            renderBlock block
+    in
+    case status of
+        Added ->
+            prefixLines (Ansi.Color.fontColor Ansi.Color.green "+") rendered
+
+        Changed ->
+            prefixLines (Ansi.Color.fontColor Ansi.Color.yellow "~") rendered
+
+        ModuleAdded ->
+            prefixLines (Ansi.Color.fontColor Ansi.Color.green "+") rendered
+
+        Unchanged ->
+            rendered
+
+
+{-| Render a removed item (name only, with red strikethrough).
+-}
+renderRemovedItem : String -> String
+renderRemovedItem name =
+    Ansi.Color.fontColor Ansi.Color.red ("- " ++ Ansi.Font.strikeThrough name)
+
+
+{-| Render a complete module view with diff markers on each block.
+-}
+renderModuleWithDiff : ApiDiff -> Docs.Module -> String
+renderModuleWithDiff diff module_ =
+    let
+        header =
+            Ansi.Font.bold ("── " ++ module_.name ++ " " ++ String.repeat (40 - String.length module_.name) "─")
+
+        blocks =
+            Block.toBlocks module_
+
+        renderedBlocks =
+            List.map
+                (\block ->
+                    let
+                        status =
+                            blockDiffStatus diff module_.name block
+                    in
+                    renderBlockWithDiff status block
+                )
+                blocks
+
+        removedItems =
+            case Diff.findModuleChanges module_.name diff.changedModules of
+                Just mc ->
+                    List.map renderRemovedItem mc.removed
+
+                Nothing ->
+                    []
+
+        allParts =
+            renderedBlocks ++ removedItems
+    in
+    header ++ "\n\n" ++ String.join "\n\n" allParts ++ "\n"
+
+
+{-| Determine the diff status for a block based on its name.
+-}
+blockDiffStatus : ApiDiff -> String -> Docs.Block -> DiffStatus
+blockDiffStatus diff moduleName block =
+    case blockName block of
+        Just name ->
+            Diff.lookupItem diff moduleName name
+
+        Nothing ->
+            Unchanged
+
+
+{-| Extract the name from a block, if it has one.
+-}
+blockName : Docs.Block -> Maybe String
+blockName block =
+    case block of
+        Docs.ValueBlock { name } ->
+            Just name
+
+        Docs.UnionBlock { name } ->
+            Just name
+
+        Docs.AliasBlock { name } ->
+            Just name
+
+        Docs.BinopBlock { name } ->
+            Just name
+
+        Docs.MarkdownBlock _ ->
+            Nothing
+
+        Docs.UnknownBlock _ ->
+            Nothing
+
+
+{-| Prefix the first line of a multi-line string with a marker.
+-}
+prefixLines : String -> String -> String
+prefixLines marker text =
+    case String.lines text of
+        [] ->
+            marker
+
+        first :: rest ->
+            (marker ++ " " ++ String.trimLeft first)
+                :: rest
+                |> String.join "\n"
 
 
 
