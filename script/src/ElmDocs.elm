@@ -362,14 +362,21 @@ computeDiffWithReadme baseDocsJson headDocsJson baseReadme headReadme =
 
 renderOutput : CliOptions -> Maybe ApiDiff -> List Docs.Module -> BackendTask FatalError ()
 renderOutput options maybeDiff modules =
-    case ( options.moduleName, maybeDiff ) of
-        ( Nothing, Nothing ) ->
+    let
+        isDiffMode =
+            parseDiffMode options.diff /= NoDiff
+    in
+    case ( options.moduleName, maybeDiff, isDiffMode ) of
+        ( Nothing, Nothing, True ) ->
+            Script.log "No API changes detected."
+
+        ( Nothing, Nothing, False ) ->
             Script.log (Render.renderToc modules)
 
-        ( Nothing, Just diff ) ->
+        ( Nothing, Just diff, _ ) ->
             Script.log (Render.renderFullDiff diff modules)
 
-        ( Just name, Nothing ) ->
+        ( Just name, Nothing, _ ) ->
             case findModule name modules of
                 Just module_ ->
                     Script.log (Render.renderModule module_)
@@ -377,7 +384,7 @@ renderOutput options maybeDiff modules =
                 Nothing ->
                     moduleNotFound name modules
 
-        ( Just name, Just diff ) ->
+        ( Just name, Just diff, _ ) ->
             case findModule name modules of
                 Just module_ ->
                     Script.log (Render.renderModuleWithDiff diff module_)
