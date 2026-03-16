@@ -6,6 +6,7 @@ import Docs.Render as Render
 import Elm.Docs as Docs
 import Elm.Type as Type
 import Expect
+import Json.Encode as Encode
 import Test exposing (Test, describe, test)
 
 
@@ -607,6 +608,34 @@ diffRenderTests =
                     Expect.all
                         [ \s -> s |> String.contains "~" |> Expect.equal True
                         , \s -> s |> String.contains "[43m" |> Expect.equal True
+                        ]
+                        result
+            , test "Changed value shows old type signature strikethrough when oldTypes present" <|
+                \() ->
+                    let
+                        diffWithOldType =
+                            { sampleDiff
+                                | oldTypes =
+                                    Dict.singleton "ChangedModule"
+                                        (Dict.singleton "map"
+                                            (Encode.string "a -> a")
+                                        )
+                            }
+
+                        block =
+                            Docs.ValueBlock
+                                { name = "map"
+                                , comment = "Map function."
+                                , tipe = Type.Lambda (Type.Var "a") (Type.Var "b")
+                                }
+
+                        result =
+                            Render.renderBlockWithDiff diffWithOldType "ChangedModule" Changed block
+                    in
+                    Expect.all
+                        [ \s -> s |> String.contains "a -> a" |> Expect.equal True
+                        , \s -> s |> String.contains "[9m" |> Expect.equal True
+                        , \s -> s |> String.contains "a -> b" |> Expect.equal True
                         ]
                         result
             , test "Unchanged value has no prefix marker" <|
