@@ -26,7 +26,7 @@ type alias CliOptions =
 type DiffMode
     = NoDiff
     | DiffPublished
-    | DiffRefs String String
+    | DiffRefs String
 
 
 program : Program.Config CliOptions
@@ -52,12 +52,20 @@ parseDiffMode maybeDiff =
             NoDiff
 
         Just value ->
-            case String.split ".." value of
-                [ base, head ] ->
-                    DiffRefs base head
+            if String.contains ".." value then
+                case String.split ".." value of
+                    [ base, _ ] ->
+                        DiffRefs base
 
-                _ ->
-                    DiffPublished
+                    _ ->
+                        DiffPublished
+
+            else if value == "published" then
+                DiffPublished
+
+            else
+                -- Single ref like HEAD, HEAD~1, main, etc.
+                DiffRefs value
 
 
 run : Script
@@ -168,7 +176,7 @@ decodeAndRender options elmJson jsonString =
                         |> BackendTask.andThen
                             (\maybeDiff -> renderOutput options maybeDiff modules)
 
-                DiffRefs base _ ->
+                DiffRefs base ->
                     buildBaseDocs base elmJson
                         |> BackendTask.andThen
                             (\{ baseDocs, baseReadme } ->
