@@ -3,6 +3,8 @@ module DiffTuiTest exposing (suite)
 import Dict
 import DiffTui
 import Docs.Diff exposing (ApiDiff, ModuleChanges)
+import Elm.Docs as Docs
+import Elm.Type as Type
 import Expect
 import Json.Encode as Encode
 import Test exposing (Test, describe, test)
@@ -16,44 +18,44 @@ suite =
         [ describe "initial view"
             [ test "shows module names in left pane" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.ensureViewHas "MyModule"
                         |> TuiTest.ensureViewHas "NewModule"
                         |> TuiTest.expectRunning
             , test "shows diff pane on the right" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "Diff"
                         |> TuiTest.expectRunning
             , test "first module is selected by default" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "NewModule"
                         |> TuiTest.expectRunning
             , test "shows added items in diff pane for new module" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "New module"
                         |> TuiTest.expectRunning
             ]
         , describe "navigation"
             [ test "j moves selection down" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey 'j'
                         |> TuiTest.ensureViewHas "MyModule"
                         |> TuiTest.expectRunning
             , test "k moves selection up" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey 'j'
                         |> TuiTest.pressKey 'k'
                         |> TuiTest.ensureViewHas "NewModule"
                         |> TuiTest.expectRunning
             , test "arrow keys navigate" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKeyWith { key = Tui.Arrow Tui.Down, modifiers = [] }
                         |> TuiTest.pressKeyWith { key = Tui.Arrow Tui.Up, modifiers = [] }
                         |> TuiTest.expectRunning
@@ -61,13 +63,13 @@ suite =
         , describe "pane focus"
             [ test "l focuses diff pane" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey 'l'
                         |> TuiTest.ensureViewHas "Diff"
                         |> TuiTest.expectRunning
             , test "h focuses modules pane" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey 'l'
                         |> TuiTest.pressKey 'h'
                         |> TuiTest.expectRunning
@@ -75,44 +77,75 @@ suite =
         , describe "quit"
             [ test "q exits" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey 'q'
                         |> TuiTest.expectExit
             , test "Escape exits" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKeyWith { key = Tui.Escape, modifiers = [] }
                         |> TuiTest.expectExit
             ]
-        , describe "diff content"
-            [ test "changed module shows added items" <|
+        , describe "rendered docs - type signatures"
+            [ test "shows type signature for added value" <|
                 \() ->
-                    startWithDiff changedModuleDiff
-                        |> TuiTest.ensureViewHas "Added"
-                        |> TuiTest.ensureViewHas "newFunction"
+                    startWith sampleDiff sampleModules
+                        |> TuiTest.pressKey 'j'
+                        -- MyModule is second, has added "identity : a -> a"
+                        |> TuiTest.ensureViewHas "identity"
+                        |> TuiTest.ensureViewHas "a -> a"
                         |> TuiTest.expectRunning
-            , test "changed module shows removed items" <|
+            , test "shows type signature for changed value" <|
                 \() ->
-                    startWithDiff changedModuleDiff
-                        |> TuiTest.ensureViewHas "Removed"
-                        |> TuiTest.ensureViewHas "oldFunction"
-                        |> TuiTest.expectRunning
-            , test "changed module shows changed items" <|
-                \() ->
-                    startWithDiff changedModuleDiff
-                        |> TuiTest.ensureViewHas "Changed"
+                    startWith changedModuleDiff changedModules
                         |> TuiTest.ensureViewHas "modifiedFunction"
+                        |> TuiTest.ensureViewHas "String -> Int"
+                        |> TuiTest.expectRunning
+            , test "shows union type constructors" <|
+                \() ->
+                    startWith unionDiff unionModules
+                        |> TuiTest.ensureViewHas "type Status"
+                        |> TuiTest.ensureViewHas "Loading"
+                        |> TuiTest.ensureViewHas "Success"
+                        |> TuiTest.expectRunning
+            , test "shows type alias definition" <|
+                \() ->
+                    startWith aliasDiff aliasModules
+                        |> TuiTest.ensureViewHas "type alias Config"
+                        |> TuiTest.expectRunning
+            ]
+        , describe "rendered docs - doc comments"
+            [ test "shows doc comment for value" <|
+                \() ->
+                    startWith sampleDiff sampleModules
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.ensureViewHas "Return the argument unchanged"
+                        |> TuiTest.expectRunning
+            ]
+        , describe "rendered docs - old type signatures"
+            [ test "shows old type signature for changed items" <|
+                \() ->
+                    startWith changedWithOldType changedModules
+                        |> TuiTest.ensureViewHas "String -> String"
+                        |> TuiTest.ensureViewHas "String -> Int"
+                        |> TuiTest.expectRunning
+            ]
+        , describe "diff content"
+            [ test "changed module shows removed items" <|
+                \() ->
+                    startWith changedModuleDiff changedModules
+                        |> TuiTest.ensureViewHas "oldFunction"
                         |> TuiTest.expectRunning
             , test "removed module shows removal message" <|
                 \() ->
-                    startWithDiff removedModuleDiff
+                    startWith removedModuleDiff []
                         |> TuiTest.ensureViewHas "Removed module"
                         |> TuiTest.expectRunning
             ]
         , describe "diff pane scrolling"
             [ test "j/k scrolls when diff pane is focused" <|
                 \() ->
-                    startWithDiff changedModuleDiff
+                    startWith changedModuleDiff changedModules
                         |> TuiTest.pressKey 'l'
                         |> TuiTest.pressKey 'j'
                         |> TuiTest.expectRunning
@@ -120,51 +153,51 @@ suite =
         , describe "module footer"
             [ test "shows selection position in footer" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "1 of"
                         |> TuiTest.expectRunning
             ]
         , describe "navigating between modules updates diff"
             [ test "selecting second module shows its diff" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "New module"
                         |> TuiTest.pressKey 'j'
-                        |> TuiTest.ensureViewHas "Added"
                         |> TuiTest.ensureViewHas "identity"
+                        |> TuiTest.ensureViewHas "a -> a"
                         |> TuiTest.ensureViewDoesNotHave "New module"
                         |> TuiTest.expectRunning
             ]
         , describe "magnitude banner"
             [ test "shows magnitude in the diff view" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.ensureViewHas "MINOR"
                         |> TuiTest.expectRunning
             ]
         , describe "README diff"
             [ test "shows README tab when readme diff exists" <|
                 \() ->
-                    startWithDiff readmeDiff
+                    startWith readmeDiff readmeModules
                         |> TuiTest.ensureViewHas "README"
                         |> TuiTest.expectRunning
             , test "selecting README shows diff content" <|
                 \() ->
-                    startWithDiff readmeDiff
+                    startWith readmeDiff readmeModules
                         |> TuiTest.ensureViewHas "+ New content"
                         |> TuiTest.expectRunning
             ]
         , describe "comment diffs"
             [ test "shows comment diffs for items with doc changes" <|
                 \() ->
-                    startWithDiff commentDiff
+                    startWith commentDiff commentModules
                         |> TuiTest.ensureViewHas "Doc changes"
                         |> TuiTest.expectRunning
             ]
         , describe "combined diff"
             [ test "shows all types of changes together" <|
                 \() ->
-                    startWithDiff fullDiff
+                    startWith fullDiff fullModules
                         |> TuiTest.ensureViewHas "README"
                         |> TuiTest.ensureViewHas "ChangedModule"
                         |> TuiTest.ensureViewHas "AddedModule"
@@ -172,35 +205,35 @@ suite =
                         |> TuiTest.expectRunning
             , test "module count badge is correct" <|
                 \() ->
-                    startWithDiff fullDiff
+                    startWith fullDiff fullModules
                         |> TuiTest.ensureViewHas "[4]"
                         |> TuiTest.expectRunning
             ]
         , describe "empty diff"
             [ test "handles diff with no changes gracefully" <|
                 \() ->
-                    startWithDiff emptyDiff
+                    startWith emptyDiff []
                         |> TuiTest.ensureViewHas "PATCH"
                         |> TuiTest.expectRunning
             ]
         , describe "help screen"
             [ test "? shows help" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey '?'
                         |> TuiTest.ensureViewHas "Quit"
                         |> TuiTest.ensureViewHas "Next module"
                         |> TuiTest.expectRunning
             , test "? toggles help off" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey '?'
                         |> TuiTest.pressKey '?'
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.expectRunning
             , test "Escape closes help" <|
                 \() ->
-                    startWithDiff sampleDiff
+                    startWith sampleDiff sampleModules
                         |> TuiTest.pressKey '?'
                         |> TuiTest.pressKeyWith { key = Tui.Escape, modifiers = [] }
                         |> TuiTest.ensureViewHas "Modules"
@@ -211,7 +244,7 @@ suite =
                 \() ->
                     let
                         snapshots =
-                            startWithDiff sampleDiff
+                            startWith sampleDiff sampleModules
                                 |> TuiTest.pressKey 'j'
                                 |> TuiTest.pressKey 'l'
                                 |> TuiTest.pressKey 'j'
@@ -226,10 +259,16 @@ suite =
 -- TEST HELPERS
 
 
-startWithDiff : ApiDiff -> TuiTest.TuiTest DiffTui.Model DiffTui.Msg
-startWithDiff diff =
-    TuiTest.start
-        { data = diff
+type alias InitData =
+    { diff : ApiDiff
+    , modules : List Docs.Module
+    }
+
+
+startWith : ApiDiff -> List Docs.Module -> TuiTest.TuiTest DiffTui.Model DiffTui.Msg
+startWith diff modules =
+    TuiTest.startWithContext { width = 120, height = 40, colorProfile = Tui.TrueColor }
+        { data = { diff = diff, modules = modules }
         , init = DiffTui.init
         , update = DiffTui.update
         , view = DiffTui.view
@@ -238,7 +277,177 @@ startWithDiff diff =
 
 
 
--- FIXTURES
+-- MODULE FIXTURES
+
+
+myModule : Docs.Module
+myModule =
+    { name = "MyModule"
+    , comment = "A module for doing things.\n\n@docs identity"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "identity"
+          , comment = "Return the argument unchanged."
+          , tipe = Type.Lambda (Type.Var "a") (Type.Var "a")
+          }
+        ]
+    , binops = []
+    }
+
+
+newModule : Docs.Module
+newModule =
+    { name = "NewModule"
+    , comment = "A new module.\n\n@docs hello"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "hello"
+          , comment = "Say hello."
+          , tipe = Type.Type "String" []
+          }
+        ]
+    , binops = []
+    }
+
+
+sampleModules : List Docs.Module
+sampleModules =
+    [ newModule, myModule ]
+
+
+changedModule : Docs.Module
+changedModule =
+    { name = "Api.Module"
+    , comment = "An API module.\n\n@docs newFunction, modifiedFunction"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "newFunction"
+          , comment = "A new function."
+          , tipe = Type.Lambda (Type.Type "String" []) (Type.Type "String" [])
+          }
+        , { name = "modifiedFunction"
+          , comment = "A modified function."
+          , tipe = Type.Lambda (Type.Type "String" []) (Type.Type "Int" [])
+          }
+        ]
+    , binops = []
+    }
+
+
+changedModules : List Docs.Module
+changedModules =
+    [ changedModule ]
+
+
+unionModule : Docs.Module
+unionModule =
+    { name = "Types"
+    , comment = "Type definitions.\n\n@docs Status"
+    , unions =
+        [ { name = "Status"
+          , comment = "Represents loading state."
+          , args = []
+          , tags =
+                [ ( "Loading", [] )
+                , ( "Success", [ Type.Type "String" [] ] )
+                , ( "Failure", [ Type.Type "String" [] ] )
+                ]
+          }
+        ]
+    , aliases = []
+    , values = []
+    , binops = []
+    }
+
+
+unionModules : List Docs.Module
+unionModules =
+    [ unionModule ]
+
+
+aliasModule : Docs.Module
+aliasModule =
+    { name = "Config"
+    , comment = "Configuration.\n\n@docs Config"
+    , unions = []
+    , aliases =
+        [ { name = "Config"
+          , comment = "App configuration."
+          , args = []
+          , tipe =
+                Type.Record
+                    [ ( "host", Type.Type "String" [] )
+                    , ( "port_", Type.Type "Int" [] )
+                    ]
+                    Nothing
+          }
+        ]
+    , values = []
+    , binops = []
+    }
+
+
+aliasModules : List Docs.Module
+aliasModules =
+    [ aliasModule ]
+
+
+readmeModules : List Docs.Module
+readmeModules =
+    [ myModule ]
+
+
+commentModules : List Docs.Module
+commentModules =
+    [ myModule ]
+
+
+addedModule : Docs.Module
+addedModule =
+    { name = "AddedModule"
+    , comment = "New.\n\n@docs thing"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "thing"
+          , comment = "A thing."
+          , tipe = Type.Type "Int" []
+          }
+        ]
+    , binops = []
+    }
+
+
+changedModuleFull : Docs.Module
+changedModuleFull =
+    { name = "ChangedModule"
+    , comment = "Changed.\n\n@docs newFn, updatedFn"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "newFn"
+          , comment = "New."
+          , tipe = Type.Type "Int" []
+          }
+        , { name = "updatedFn"
+          , comment = "Updated."
+          , tipe = Type.Lambda (Type.Type "String" []) (Type.Type "Int" [])
+          }
+        ]
+    , binops = []
+    }
+
+
+fullModules : List Docs.Module
+fullModules =
+    [ addedModule, changedModuleFull ]
+
+
+
+-- DIFF FIXTURES
 
 
 sampleDiff : ApiDiff
@@ -271,6 +480,57 @@ changedModuleDiff =
           , removed = [ "oldFunction" ]
           }
         ]
+    , commentDiffs = Dict.empty
+    , readmeDiff = Nothing
+    , oldTypes = Dict.empty
+    }
+
+
+changedWithOldType : ApiDiff
+changedWithOldType =
+    { magnitude = "MAJOR"
+    , addedModules = []
+    , removedModules = []
+    , changedModules =
+        [ { name = "Api.Module"
+          , added = []
+          , changed = [ "modifiedFunction" ]
+          , removed = []
+          }
+        ]
+    , commentDiffs = Dict.empty
+    , readmeDiff = Nothing
+    , oldTypes =
+        Dict.fromList
+            [ ( "Api.Module"
+              , Dict.fromList
+                    [ ( "modifiedFunction"
+                      , Encode.string "String -> String"
+                      )
+                    ]
+              )
+            ]
+    }
+
+
+unionDiff : ApiDiff
+unionDiff =
+    { magnitude = "MINOR"
+    , addedModules = [ "Types" ]
+    , removedModules = []
+    , changedModules = []
+    , commentDiffs = Dict.empty
+    , readmeDiff = Nothing
+    , oldTypes = Dict.empty
+    }
+
+
+aliasDiff : ApiDiff
+aliasDiff =
+    { magnitude = "MINOR"
+    , addedModules = [ "Config" ]
+    , removedModules = []
+    , changedModules = []
     , commentDiffs = Dict.empty
     , readmeDiff = Nothing
     , oldTypes = Dict.empty

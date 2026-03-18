@@ -17,6 +17,7 @@ import Cli.OptionsParser as OptionsParser
 import Cli.Program as Program
 import DiffTui
 import Docs.Diff as Diff exposing (ApiDiff)
+import Elm.Docs as Docs
 import FatalError exposing (FatalError)
 import Json.Decode as Decode
 import Json.Encode as Encode
@@ -73,12 +74,12 @@ run =
     Script.tuiWithCliOptions program
         (\options ->
             { data =
-                loadDiff options
+                loadDiffWithModules options
                     |> BackendTask.andThen
-                        (\maybeDiff ->
-                            case maybeDiff of
+                        (\result ->
+                            case result.diff of
                                 Just diff ->
-                                    BackendTask.succeed diff
+                                    BackendTask.succeed { diff = diff, modules = result.modules }
 
                                 Nothing ->
                                     BackendTask.fail
@@ -101,20 +102,34 @@ type alias ElmJson =
     }
 
 
-loadDiff : CliOptions -> BackendTask FatalError (Maybe ApiDiff)
-loadDiff options =
+loadDiffWithModules : CliOptions -> BackendTask FatalError { diff : Maybe ApiDiff, modules : List Docs.Module }
+loadDiffWithModules options =
     readElmJson
         |> BackendTask.andThen
             (\elmJson ->
                 buildCurrentDocs elmJson
                     |> BackendTask.andThen
                         (\headDocsJson ->
-                            case parseDiffMode options.diff of
+                            let
+                                modulesResult =
+                                    case Decode.decodeString (Decode.list Docs.decoder) headDocsJson of
+                                        Ok modules ->
+                                            modules
+
+                                        Err _ ->
+                                            []
+                            in
+                            (case parseDiffMode options.diff of
                                 DiffPublished ->
                                     fetchPublishedDiff elmJson headDocsJson
 
                                 DiffRefs base ->
                                     buildRefDiff base elmJson headDocsJson
+                            )
+                                |> BackendTask.map
+                                    (\maybeDiff ->
+                                        { diff = maybeDiff, modules = modulesResult }
+                                    )
                         )
             )
 

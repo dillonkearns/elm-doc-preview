@@ -3,13 +3,18 @@ module DiffTui exposing (Model, Msg, init, subscriptions, update, view)
 {-| Lazygit-style TUI for browsing Elm API diffs.
 
 Left pane: list of entries (README, modules) with diff status
-Right pane: detailed diff view for the selected entry
+Right pane: detailed diff view for the selected entry, with full
+rendered type signatures, doc comments, and unified diffs.
 
 -}
 
 import Ansi.Color
 import Dict
 import Docs.Diff as Diff exposing (ApiDiff, ModuleChanges)
+import Docs.Render as Render
+import Elm.Docs as Docs
+import Elm.Type as Type
+import Json.Decode as Decode
 import Tui
 import Tui.Effect as Effect
 import Tui.Keybinding as Keybinding
@@ -26,6 +31,7 @@ type Entry
 type alias Model =
     { layout : Layout.State
     , diff : ApiDiff
+    , modules : List Docs.Module
     , entries : List Entry
     , showHelp : Bool
     }
@@ -35,10 +41,11 @@ type Msg
     = KeyPressed Tui.KeyEvent
     | MouseEvent Tui.MouseEvent
     | SelectEntry Int
+    | GotContext { width : Int, height : Int }
 
 
-init : ApiDiff -> ( Model, Effect.Effect Msg )
-init diff =
+init : { diff : ApiDiff, modules : List Docs.Module } -> ( Model, Effect.Effect Msg )
+init { diff, modules } =
     let
         entries =
             buildEntries diff
@@ -47,6 +54,7 @@ init diff =
             Layout.init
                 |> Layout.focusPane "modules"
       , diff = diff
+      , modules = modules
       , entries = entries
       , showHelp = False
       }
@@ -108,6 +116,20 @@ entryName entry =
             name
 
 
+findModule : String -> List Docs.Module -> Maybe Docs.Module
+findModule name modules =
+    case modules of
+        [] ->
+            Nothing
+
+        mod :: rest ->
+            if mod.name == name then
+                Just mod
+
+            else
+                findModule name rest
+
+
 update : Msg -> Model -> ( Model, Effect.Effect Msg )
 update msg model =
     case msg of
@@ -139,6 +161,14 @@ update msg model =
                 | layout =
                     model.layout
                         |> Layout.resetScroll "diff"
+              }
+            , Effect.none
+            )
+
+        GotContext ctx ->
+            ( { model
+                | layout =
+                    Layout.withContext ctx model.layout
               }
             , Effect.none
             )
@@ -300,15 +330,20 @@ viewLayout ctx model =
         ]
 
 
+modulesPaneWidth : Int -> Layout.Width
+modulesPaneWidth termWidth =
+    Layout.px (min 40 (termWidth // 3))
+
+
 entriesPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
-entriesPane _ model =
+entriesPane ctx model =
     let
         entryCount =
             List.length model.entries
     in
     Layout.pane "modules"
         { title = "Modules"
-        , width = paneWidth model.layout "modules"
+        , width = modulesPaneWidth ctx.width
         }
         (Layout.selectableList
             { onSelect = SelectEntry
@@ -332,7 +367,7 @@ renderEntrySelected diff entry =
         , Tui.styled
             { fg = Nothing
             , bg = Nothing
-            , attributes = [ Tui.bold, Tui.inverse ]
+            , attributes = [ Tui.Bold, Tui.Inverse ]
             }
             (" " ++ entryName entry ++ " ")
         ]
@@ -350,30 +385,21 @@ entryBadge : ApiDiff -> Entry -> Tui.Screen
 entryBadge diff entry =
     case entry of
         ReadmeEntry ->
-            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.bold ] } " ~ "
+            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
 
         ModuleEntry name ->
             case Diff.moduleStatus diff name of
                 Diff.ModuleNew ->
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.bold ] } " + "
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } " + "
 
                 Diff.ModuleChanged ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
 
                 Diff.ModuleRemoved ->
-                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.bold ] } " - "
+                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] } " - "
 
                 Diff.ModuleUnchanged ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.bold ] } " ~ "
-
-
-paneWidth : Layout.State -> String -> Layout.Width
-paneWidth layoutState paneId =
-    if Layout.focusedPane layoutState == Just paneId then
-        Layout.fillPortion 2
-
-    else
-        Layout.fill
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
 
 
 diffPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
@@ -387,7 +413,7 @@ diffPane _ model =
         entryDiffLines =
             case selectedEntry model of
                 Just entry ->
-                    renderEntryDiff model.diff entry
+                    renderEntryDiff model.diff model.modules entry
 
                 Nothing ->
                     [ Tui.text "No entry selected" ]
@@ -397,7 +423,7 @@ diffPane _ model =
     in
     Layout.pane "diff"
         { title = "Diff"
-        , width = paneWidth model.layout "diff"
+        , width = Layout.fill
         }
         (Layout.content diffLines)
 
@@ -419,25 +445,25 @@ magnitudeLine magnitude =
                 _ ->
                     Ansi.Color.white
     in
-    Tui.styled { fg = Just color, bg = Nothing, attributes = [ Tui.bold ] }
+    Tui.styled { fg = Just color, bg = Nothing, attributes = [ Tui.Bold ] }
         ("  " ++ magnitude ++ " CHANGE")
 
 
-renderEntryDiff : ApiDiff -> Entry -> List Tui.Screen
-renderEntryDiff diff entry =
+renderEntryDiff : ApiDiff -> List Docs.Module -> Entry -> List Tui.Screen
+renderEntryDiff diff modules entry =
     case entry of
         ReadmeEntry ->
             renderReadmeDiff diff
 
         ModuleEntry moduleName ->
-            renderModuleDiff diff moduleName
+            renderModuleDiff diff modules moduleName
 
 
 renderReadmeDiff : ApiDiff -> List Tui.Screen
 renderReadmeDiff diff =
     case diff.readmeDiff of
         Just rdiff ->
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.bold ] } "  README Changes"
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  README Changes"
                 :: Tui.text ""
                 :: renderUnifiedDiffLines rdiff
 
@@ -462,8 +488,55 @@ renderUnifiedDiffLines diffText =
             )
 
 
-renderModuleDiff : ApiDiff -> String -> List Tui.Screen
-renderModuleDiff diff moduleName =
+renderModuleDiff : ApiDiff -> List Docs.Module -> String -> List Tui.Screen
+renderModuleDiff diff modules moduleName =
+    let
+        isNewModule =
+            List.member moduleName diff.addedModules
+
+        isRemovedModule =
+            List.member moduleName diff.removedModules
+
+        maybeModule =
+            findModule moduleName modules
+    in
+    if isNewModule then
+        renderNewModule moduleName maybeModule
+
+    else if isRemovedModule then
+        renderRemovedModule moduleName
+
+    else
+        renderChangedModule diff moduleName maybeModule
+
+
+renderNewModule : String -> Maybe Docs.Module -> List Tui.Screen
+renderNewModule moduleName maybeModule =
+    let
+        header =
+            [ Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] }
+                ("  New module: " ++ moduleName)
+            , Tui.text ""
+            ]
+    in
+    case maybeModule of
+        Just mod ->
+            header ++ renderAllBlocks mod
+
+        Nothing ->
+            header
+
+
+renderRemovedModule : String -> List Tui.Screen
+renderRemovedModule moduleName =
+    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] }
+        ("  Removed module: " ++ moduleName)
+    , Tui.text ""
+    ]
+
+
+renderChangedModule : ApiDiff -> String -> Maybe Docs.Module -> List Tui.Screen
+renderChangedModule diff moduleName maybeModule =
     let
         moduleChanges =
             Diff.findModuleChanges moduleName diff.changedModules
@@ -483,63 +556,29 @@ renderModuleDiff diff moduleName =
                 |> Maybe.map .removed
                 |> Maybe.withDefault []
 
-        isNewModule =
-            List.member moduleName diff.addedModules
-
-        isRemovedModule =
-            List.member moduleName diff.removedModules
-
-        header =
-            if isNewModule then
-                [ Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.bold ] }
-                    ("  New module: " ++ moduleName)
-                , Tui.text ""
-                ]
-
-            else if isRemovedModule then
-                [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.bold ] }
-                    ("  Removed module: " ++ moduleName)
-                , Tui.text ""
-                ]
-
-            else
-                []
-
         addedSection =
-            if List.isEmpty addedItems then
-                []
-
-            else
-                Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.bold ] } "  Added:"
-                    :: List.map
-                        (\item ->
-                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } ("    + " ++ item)
-                        )
-                        addedItems
-                    ++ [ Tui.text "" ]
+            addedItems
+                |> List.concatMap
+                    (\itemName ->
+                        renderItemBlock diff moduleName itemName Diff.Added maybeModule
+                    )
 
         changedSection =
-            if List.isEmpty changedItems then
-                []
-
-            else
-                Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.bold ] } "  Changed:"
-                    :: List.map
-                        (\item ->
-                            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } ("    ~ " ++ item)
-                        )
-                        changedItems
-                    ++ [ Tui.text "" ]
+            changedItems
+                |> List.concatMap
+                    (\itemName ->
+                        renderItemBlock diff moduleName itemName Diff.Changed maybeModule
+                    )
 
         removedSection =
             if List.isEmpty removedItems then
                 []
 
             else
-                Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.bold ] } "  Removed:"
+                Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] } "  Removed:"
                     :: List.map
                         (\item ->
-                            Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [] } ("    - " ++ item)
+                            Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ] } ("    " ++ item)
                         )
                         removedItems
                     ++ [ Tui.text "" ]
@@ -548,13 +587,274 @@ renderModuleDiff diff moduleName =
             renderCommentDiffs diff moduleName
 
         allSections =
-            header ++ addedSection ++ changedSection ++ removedSection ++ commentDiffSection
+            addedSection ++ changedSection ++ removedSection ++ commentDiffSection
     in
     if List.isEmpty allSections then
         [ Tui.text "  No changes in this module" ]
 
     else
         allSections
+
+
+renderItemBlock : ApiDiff -> String -> String -> Diff.DiffStatus -> Maybe Docs.Module -> List Tui.Screen
+renderItemBlock diff moduleName itemName status maybeModule =
+    let
+        badge =
+            case status of
+                Diff.Added ->
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } " + "
+
+                Diff.Changed ->
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+
+                _ ->
+                    Tui.text "   "
+
+        oldTypeLine =
+            case status of
+                Diff.Changed ->
+                    renderOldType diff moduleName itemName
+
+                _ ->
+                    []
+
+        blockLines =
+            case maybeModule of
+                Just mod ->
+                    case findBlock itemName mod of
+                        Just block ->
+                            renderBlock block
+
+                        Nothing ->
+                            [ Tui.concat [ badge, Tui.text (" " ++ itemName) ] ]
+
+                Nothing ->
+                    [ Tui.concat [ badge, Tui.text (" " ++ itemName) ] ]
+
+        badgedLines =
+            case blockLines of
+                first :: rest ->
+                    Tui.concat [ badge, first ] :: rest
+
+                [] ->
+                    [ badge ]
+    in
+    oldTypeLine ++ badgedLines ++ [ Tui.text "" ]
+
+
+renderOldType : ApiDiff -> String -> String -> List Tui.Screen
+renderOldType diff moduleName itemName =
+    case Diff.getOldType diff moduleName itemName of
+        Just typeValue ->
+            case Decode.decodeValue Type.decoder typeValue of
+                Ok tipe ->
+                    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ] }
+                        ("   " ++ itemName ++ " : " ++ Render.typeToString tipe)
+                    ]
+
+                Err _ ->
+                    []
+
+        Nothing ->
+            []
+
+
+findBlock : String -> Docs.Module -> Maybe Docs.Block
+findBlock name mod =
+    let
+        blocks =
+            Docs.toBlocks mod
+    in
+    blocks
+        |> List.filter
+            (\block ->
+                case block of
+                    Docs.ValueBlock v ->
+                        v.name == name
+
+                    Docs.UnionBlock u ->
+                        u.name == name
+
+                    Docs.AliasBlock a ->
+                        a.name == name
+
+                    Docs.BinopBlock b ->
+                        b.name == name
+
+                    _ ->
+                        False
+            )
+        |> List.head
+
+
+
+-- BLOCK RENDERING TO TUI SCREENS
+
+
+renderAllBlocks : Docs.Module -> List Tui.Screen
+renderAllBlocks mod =
+    Docs.toBlocks mod
+        |> List.concatMap
+            (\block ->
+                case block of
+                    Docs.MarkdownBlock _ ->
+                        []
+
+                    _ ->
+                        renderBlock block ++ [ Tui.text "" ]
+            )
+
+
+renderBlock : Docs.Block -> List Tui.Screen
+renderBlock block =
+    case block of
+        Docs.ValueBlock value ->
+            renderValueTui value
+
+        Docs.UnionBlock union ->
+            renderUnionTui union
+
+        Docs.AliasBlock alias_ ->
+            renderAliasTui alias_
+
+        Docs.BinopBlock binop ->
+            renderBinopTui binop
+
+        Docs.MarkdownBlock _ ->
+            []
+
+        Docs.UnknownBlock name ->
+            [ Tui.text ("  (unknown: " ++ name ++ ")") ]
+
+
+renderValueTui : Docs.Value -> List Tui.Screen
+renderValueTui { name, comment, tipe } =
+    let
+        typeStr =
+            Render.typeToString tipe
+
+        header =
+            Tui.concat
+                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
+                , Tui.text " : "
+                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } typeStr
+                ]
+
+        commentLines =
+            renderDocComment comment
+    in
+    header :: commentLines
+
+
+renderUnionTui : Docs.Union -> List Tui.Screen
+renderUnionTui { name, comment, args, tags } =
+    let
+        typeVars =
+            case args of
+                [] ->
+                    ""
+
+                _ ->
+                    " " ++ String.join " " args
+
+        header =
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
+                ("type " ++ name ++ typeVars)
+
+        constructorLines =
+            case tags of
+                [] ->
+                    []
+
+                first :: rest ->
+                    Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                        ("    = " ++ renderTag first)
+                        :: List.map
+                            (\t ->
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                    ("    | " ++ renderTag t)
+                            )
+                            rest
+
+        commentLines =
+            renderDocComment comment
+    in
+    header :: constructorLines ++ commentLines
+
+
+renderTag : ( String, List Type.Type ) -> String
+renderTag ( tagName, tagArgs ) =
+    case tagArgs of
+        [] ->
+            tagName
+
+        _ ->
+            tagName ++ " " ++ String.join " " (List.map Render.typeToString tagArgs)
+
+
+renderAliasTui : Docs.Alias -> List Tui.Screen
+renderAliasTui { name, comment, args, tipe } =
+    let
+        typeVars =
+            case args of
+                [] ->
+                    ""
+
+                _ ->
+                    " " ++ String.join " " args
+
+        header =
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
+                ("type alias " ++ name ++ typeVars ++ " =")
+
+        typeBody =
+            Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                ("    " ++ Render.typeToString tipe)
+
+        commentLines =
+            renderDocComment comment
+    in
+    header :: typeBody :: commentLines
+
+
+renderBinopTui : Docs.Binop -> List Tui.Screen
+renderBinopTui { name, comment, tipe } =
+    let
+        displayName =
+            "(" ++ name ++ ")"
+
+        header =
+            Tui.concat
+                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
+                , Tui.text " : "
+                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } (Render.typeToString tipe)
+                ]
+
+        commentLines =
+            renderDocComment comment
+    in
+    header :: commentLines
+
+
+renderDocComment : String -> List Tui.Screen
+renderDocComment comment =
+    let
+        trimmed =
+            String.trim comment
+    in
+    if String.isEmpty trimmed then
+        []
+
+    else
+        Tui.text ""
+            :: (trimmed
+                    |> String.lines
+                    |> List.map
+                        (\line ->
+                            Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+                                ("    " ++ line)
+                        )
+               )
 
 
 renderCommentDiffs : ApiDiff -> String -> List Tui.Screen
@@ -569,7 +869,7 @@ renderCommentDiffs diff moduleName =
                 []
 
             else
-                Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.bold ] } "  Doc changes:"
+                Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  Doc changes:"
                     :: Tui.text ""
                     :: List.concatMap
                         (\( itemName, cdiff ) ->
@@ -581,7 +881,7 @@ renderCommentDiffs diff moduleName =
                                     else
                                         itemName
                             in
-                            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.bold ] } ("    " ++ label ++ ":")
+                            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } ("    " ++ label ++ ":")
                                 :: renderUnifiedDiffLines cdiff
                                 ++ [ Tui.text "" ]
                         )
@@ -600,4 +900,5 @@ subscriptions _ =
     Tui.Sub.batch
         [ Tui.Sub.onKeyPress KeyPressed
         , Tui.Sub.onMouse MouseEvent
+        , Tui.Sub.onContext GotContext
         ]
