@@ -721,7 +721,7 @@ class DocServer {
     this.manifest = getManifestSync("elm.json");
 
     info(
-      chalk.bold(`elm-doc-preview ${version}`),
+      chalk.bold(`elm-doc ${version}`),
       `using elm ${this.elmVersion}`
     );
     if (this.manifest && this.manifest.name && this.manifest.version) {

@@ -1,6 +1,6 @@
 # License information
 
-## [elm-doc-preview](https://github.com/dmy/elm-doc-preview)
+## [elm-doc](https://github.com/dillonkearns/elm-doc-preview) (formerly [elm-doc-preview](https://github.com/dmy/elm-doc-preview))
 
 Copyright (c) 2014-2018, Evan Czaplicki  
 Copyright (c) 2018-2020, Rémi Lefèvre

@@ -1,7 +1,7 @@
 .PHONY: all elm_js minify clean publish elm_doc_tui
 
 elm_js := static/js/elm.js
-css := static/css/elm-doc-preview.css
+css := static/css/elm-doc.css
 cli_js := cli.js
 main := src/Main.elm
 doc_server := lib/elm-doc-server.js

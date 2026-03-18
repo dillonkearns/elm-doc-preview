@@ -1,12 +1,11 @@
 {
   "author": "Rémi Lefèvre <rlefevre@gmail.com>",
   "bin": {
-    "edp": "cli.js",
-    "elm-doc-preview": "cli.js",
-    "elm-doc": "lib/elm-docs-tui.mjs"
+    "elm-doc": "cli.js",
+    "elm-doc-tui": "lib/elm-docs-tui.mjs"
   },
   "bugs": {
-    "url": "https://github.com/dmy/elm-doc-preview/issues"
+    "url": "https://github.com/dillonkearns/elm-doc-preview/issues"
   },
   "dependencies": {
     "chalk": "^5.3.0",
@@ -23,7 +22,7 @@
     "tmp": "0.2.4",
     "ws": "^8.18.0"
   },
-  "description": "Elm offline documentation previewer with hot reloading.",
+  "description": "Elm documentation tool: browse, preview, and diff package docs locally and online.",
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
     "@types/express": "^5.0.0",
@@ -44,7 +43,7 @@
     "node": ">=20"
   },
   "exports": "./lib/elm-doc-server.js",
-  "homepage": "https://github.com/dmy/elm-doc-preview#readme",
+  "homepage": "https://github.com/dillonkearns/elm-doc-preview#readme",
   "keywords": [
     "elm",
     "package",
@@ -58,10 +57,10 @@
     "viewer"
   ],
   "license": "BSD-3-Clause",
-  "name": "elm-doc-preview",
+  "name": "@dillonkearns/elm-doc",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dmy/elm-doc-preview.git"
+    "url": "git+https://github.com/dillonkearns/elm-doc-preview.git"
   },
   "scripts": {
     "build": "make",

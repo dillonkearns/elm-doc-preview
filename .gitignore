@@ -2,7 +2,7 @@ elm-stuff
 node_modules
 index.html
 static/js/elm.js
-static/css/elm-doc-preview.css
+static/css/elm-doc.css
 lib/elm-doc-server.js
 lib/elm-doc-server.js.map
 lib/elm-doc-server.d.ts

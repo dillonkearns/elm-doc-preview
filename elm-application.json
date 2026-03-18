@@ -1,6 +1,6 @@
 {
-    "name": "dmy/elm-doc-preview",
-    "summary": "Offline documentation previewer",
+    "name": "dillonkearns/elm-doc",
+    "summary": "Elm documentation tool",
     "version": "6.0.1",
     "exposed-modules": [
         "Href",

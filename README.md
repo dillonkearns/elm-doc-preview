@@ -1,11 +1,10 @@
-# elm-doc-preview
+# elm-doc
 
-This is an Elm 0.19 **offline** documentation previewer for **packages**,
-**applications**, their **dependencies** and **all cached packages**.
+Elm documentation tool: browse, preview, and diff package docs locally and online.
 
-It aims at rendering documentation exactly like the
-[official package website](https://package.elm-lang.org) to avoid
-any surprise when releasing a package.
+A community-driven alternative to the official Elm package documentation site,
+with improved markdown rendering, API diff viewing, and local documentation
+previewing with hot reloading.
 
 # Features
 
@@ -16,12 +15,12 @@ any surprise when releasing a package.
 - Online documentation sharing and review (using the
  [online version](#online-version))
 
-![elm-doc-preview](https://github.com/dillonkearns/elm-doc-preview/raw/d3d19a2/screenshots/elm-doc-preview.png)
+![elm-doc](https://github.com/dillonkearns/elm-doc-preview/raw/d3d19a2/screenshots/elm-doc-preview.png)
 
 # Installation
 
 ```sh
-$ npm install -g elm-doc-preview
+$ npm install -g @dillonkearns/elm-doc
 ```
 
 ## Local development install
@@ -39,16 +38,10 @@ the global install, rebuild first:
 $ npm run install:global
 ```
 
-`npm` may warn about missing peer dependencies:
-```
-npm WARN ws@7.2.3 requires a peer of bufferutil@^4.0.1 but none is installed. You must install peer dependencies yourself.
-npm WARN ws@7.2.3 requires a peer of utf-8-validate@^5.0.2 but none is installed. You must install peer dependencies yourself.
-```
-They are optional, provide marginal websockets optimizations for `elm-doc-preview` use case, and can be ignored.
 # Synopsis
 
 ```text
-Usage: edp|elm-doc-preview [options] [path_to_package_or_application]
+Usage: elm-doc [options] [path_to_package_or_application]
 
 Options:
   -V, --version             output the version number
@@ -68,27 +61,21 @@ Environment variables:
 For example, from the directory where your project `elm.json` is:
 
 ```sh
-$ elm-doc-preview
-```
-
-or
-
-```sh
-$ edp
+$ elm-doc
 ```
 
 or from anywhere:
 
 ```sh
-$ elm-doc-preview path/to/package_or_application
+$ elm-doc path/to/package_or_application
 ```
-When no package or application is found, `elm-doc-preview` will just run as an
+When no package or application is found, `elm-doc` will just run as an
 offline documentation server for local cached packages.
 
 # Applications support
 Application documentation is
 [not yet supported by Elm](https://github.com/elm/compiler/issues/1835#issuecomment-440080525),
-so `elm-doc-preview` will generate a package from the application with the same
+so `elm-doc` will generate a package from the application with the same
 modules and build the documentation from it. There are two consequences:
 1. You have to define an `elm-application.json` file to list the application
 documented modules (**exposed-modules**) and to customize the application
@@ -99,7 +86,7 @@ the documentation. Also currently, this requires ports declarations to be on
 one line, if this is an issue for you, please
 [open an issue](https://github.com/dillonkearns/elm-doc-preview/issues).
 
-Without an `elm-application.json` file, `elm-doc-preview` will show an
+Without an `elm-application.json` file, `elm-doc` will show an
 application as `my/application 1.0.0` and will report an error about
 missing `exposed-modules` unless some are eventually found in forked or
 local packages included in the application `source-directories`.
@@ -109,14 +96,14 @@ an `exposed-modules` value.**
 
 For example, here is the
 [elm-application.json](https://github.com/dillonkearns/elm-doc-preview/blob/master/elm-application.json)
-file for the `elm-doc-preview` Elm application followed by a description of
+file for the `elm-doc` Elm application followed by a description of
 each field:
 
 `elm-application.json`:
 ```elm-application.json
 {
-    "name": "dmy/elm-doc-preview",
-    "summary": "Offline documentation previewer",
+    "name": "dillonkearns/elm-doc",
+    "summary": "Elm documentation tool",
     "version": "6.0.1",
     "exposed-modules": [
         "Href",
@@ -166,7 +153,7 @@ packages (see next section). Setting the field does not remove those
 modules from the list.
 
 # Forked and local packages in applications
-`elm-doc-preview` will automatically exposes documentation for forked or local
+`elm-doc` will automatically exposes documentation for forked or local
 packages modules if their are exposed in an `elm.json` file located in the
 directory above the one declared in `source-directories`.
 
@@ -222,7 +209,7 @@ are highlighted to indicate their diff status.
 
 ### Local compare
 
-When running `elm-doc-preview` locally, you can compare any two git refs in
+When running `elm-doc` locally, you can compare any two git refs in
 your repository by navigating to:
 
 ```
@@ -236,7 +223,7 @@ http://localhost:8000/repos/my/package/compare/1.0.0...HEAD
 
 # API
 ```javascript
-import DocServer from "elm-doc-preview";
+import DocServer from "@dillonkearns/elm-doc";
 const server = new DocServer();
 server.listen();
 ```
@@ -244,7 +231,7 @@ server.listen();
 or with custom options:
 
 ```javascript
-import DocServer from "elm-doc-preview";
+import DocServer from "@dillonkearns/elm-doc";
 
 // constructor(options) {
 //   const {
@@ -262,21 +249,21 @@ server.listen();
 
 # FAQ
 
-## Is elm-doc-preview secure enough to publicly host documentation?
-`elm-doc-preview` is a development tool and is not designed to be
+## Is elm-doc secure enough to publicly host documentation?
+`elm-doc` is a development tool and is not designed to be
 exposed on internet. As such, no effort at all has been made to secure it
 and it most likely contains severe vulnerabilities. If you want to
 publicly share some documentation, use the [online version](#online-version) or maybe host
 static web pages of the documentation (see below).
 
 ## How to generate static web pages of the documentation
-This is not supported by `elm-doc-preview`, you could use [ento/elm-doc](https://github.com/ento/elm-doc) instead.
+This is not supported by `elm-doc`, you could use [ento/elm-doc](https://github.com/ento/elm-doc) instead.
 
 
 ## Why adding elm-application.json instead of using elm.json?
 Extending `elm.json` would not be convenient because `elm install`
 will remove any unexpected field from it when run, and all the additional
-fields used by `elm-doc-preview` are currently unexpected for an application,
+fields used by `elm-doc` are currently unexpected for an application,
 even if they are valid for a package.
 
 ## Why my forked/local/vendored packages modules are not automatically documented?
