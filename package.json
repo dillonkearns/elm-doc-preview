@@ -3,7 +3,7 @@
   "bin": {
     "edp": "cli.js",
     "elm-doc-preview": "cli.js",
-    "elm-doc": "lib/elm-docs-tui.mjs"
+    "elm-docs": "lib/elm-docs-tui.mjs"
   },
   "bugs": {
     "url": "https://github.com/dmy/elm-doc-preview/issues"
@@ -36,6 +36,7 @@
     "@types/ws": "^8.5.13",
     "csso-cli": "^4.0.2",
     "elm": "^0.19.1-6",
+    "elm-pages": "file:../elm-pages4",
     "genversion": "^3.2.0",
     "typescript": "^5.7.2",
     "uglify-js": "^3.19.3"

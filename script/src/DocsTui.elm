@@ -13,19 +13,28 @@ Right pane: full docs for the selected module, or diff details when toggled.
 -}
 
 import Ansi.Color
+import BackendTask exposing (BackendTask)
 import Dict
 import Docs.Diff as Diff exposing (ApiDiff, ModuleChanges)
 import Docs.Render as Render
 import Elm.Docs as Docs
 import Elm.Type as Type
+import FatalError exposing (FatalError)
 import Json.Decode as Decode
+import Markdown.Block exposing (ListItem(..), Task(..))
+import Markdown.Html
+import Markdown.Parser
+import Markdown.Renderer exposing (Renderer)
 import ModuleTree exposing (TreeEntry(..))
+import SyntaxHighlight
 import Tui
 import Tui.Effect as Effect
 import Tui.Input as Input
 import Tui.Keybinding as Keybinding
 import Tui.Layout as Layout
 import Tui.Modal as Modal
+import Tui.FuzzyMatch as FuzzyMatch
+import Tui.Spinner
 import Tui.Sub
 
 
@@ -38,6 +47,11 @@ type alias Model =
     , moduleTree : ModuleTree.ModuleTree
     , activeLeftTab : LeftTab
     , filterInput : Maybe Input.State
+    , versions : List String
+    , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+    , loadingDiff : Bool
+    , diffVersion : Maybe String
+    , spinnerTick : Int
     }
 
 
@@ -49,17 +63,27 @@ type RightView
 type LeftTab
     = ModulesTab
     | ChangesTab
+    | VersionsTab
 
 
 type Msg
     = KeyPressed Tui.KeyEvent
     | MouseEvent Tui.MouseEvent
     | SelectEntry Int
+    | SelectItem Int
     | GotContext { width : Int, height : Int }
+    | GotDiff (Maybe ApiDiff)
+    | SpinnerTick
 
 
-init : { modules : List Docs.Module, diff : Maybe ApiDiff } -> ( Model, Effect.Effect Msg )
-init { modules, diff } =
+init :
+    { modules : List Docs.Module
+    , diff : Maybe ApiDiff
+    , versions : List String
+    , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+    }
+    -> ( Model, Effect.Effect Msg )
+init { modules, diff, versions, loadDiff } =
     ( { layout =
             Layout.init
                 |> Layout.focusPane "modules"
@@ -70,6 +94,11 @@ init { modules, diff } =
       , moduleTree = ModuleTree.build (List.map .name modules)
       , activeLeftTab = ModulesTab
       , filterInput = Nothing
+      , versions = versions
+      , loadDiff = loadDiff
+      , loadingDiff = False
+      , diffVersion = Nothing
+      , spinnerTick = 0
       }
     , Effect.none
     )
@@ -90,6 +119,10 @@ visibleEntries model =
 
                         Nothing ->
                             ModuleTree.visibleEntries model.moduleTree
+
+                VersionsTab ->
+                    model.versions
+                        |> List.map (\v -> Leaf { name = v, depth = 0 })
     in
     case model.filterInput of
         Just input ->
@@ -104,7 +137,7 @@ visibleEntries model =
                 baseEntries
                     |> List.filter
                         (\entry ->
-                            String.contains query (String.toLower (ModuleTree.entryName entry))
+                            FuzzyMatch.match query (ModuleTree.entryName entry)
                         )
 
         Nothing ->
@@ -114,6 +147,14 @@ visibleEntries model =
 changedModuleEntries : ApiDiff -> List TreeEntry
 changedModuleEntries diff =
     let
+        readmeEntry =
+            case diff.readmeDiff of
+                Just _ ->
+                    [ Leaf { name = "README", depth = 0 } ]
+
+                Nothing ->
+                    []
+
         allChangedNames =
             diff.addedModules
                 ++ List.map .name diff.changedModules
@@ -128,9 +169,12 @@ changedModuleEntries diff =
                             acc ++ [ name ]
                     )
                     []
+
+        moduleEntries =
+            allChangedNames
+                |> List.map (\name -> Leaf { name = name, depth = 0 })
     in
-    allChangedNames
-        |> List.map (\name -> Leaf { name = name, depth = 0 })
+    readmeEntry ++ moduleEntries
 
 
 selectedEntry : Model -> Maybe TreeEntry
@@ -201,6 +245,34 @@ update msg model =
             , Effect.none
             )
 
+        SelectItem idx ->
+            let
+                items =
+                    itemsForCurrentView model
+
+                maybeItemName =
+                    items |> List.drop idx |> List.head
+
+                docsContent =
+                    currentDocsContent model
+
+                scrollTarget =
+                    case maybeItemName of
+                        Just itemName ->
+                            findLineForItem itemName docsContent
+
+                        Nothing ->
+                            0
+
+                newLayout =
+                    model.layout
+                        |> Layout.resetScroll "docs"
+                        |> Layout.scrollDown "docs" scrollTarget
+            in
+            ( { model | layout = newLayout }
+            , Effect.none
+            )
+
         GotContext ctx ->
             ( { model
                 | layout =
@@ -209,13 +281,34 @@ update msg model =
             , Effect.none
             )
 
+        GotDiff maybeDiff ->
+            ( { model
+                | diff = maybeDiff
+                , loadingDiff = False
+                , rightView =
+                    case maybeDiff of
+                        Just _ ->
+                            DiffView
+
+                        Nothing ->
+                            model.rightView
+              }
+            , Effect.none
+            )
+
+        SpinnerTick ->
+            ( { model | spinnerTick = model.spinnerTick + 1 }, Effect.none )
+
 
 type Action
     = Quit
     | NavigateDown
     | NavigateUp
     | FocusModules
+    | FocusItems
     | FocusDocs
+    | FocusLeft
+    | FocusRight
     | ScrollDocsDown
     | ScrollDocsUp
     | ToggleHelp
@@ -224,34 +317,116 @@ type Action
     | ToggleTreeNode
     | SwitchToModulesTab
     | SwitchToChangesTab
+    | SwitchToVersionsTab
     | CycleLeftTab
     | ActivateFilter
     | CancelFilter
+    | LoadDiffForVersion
+    | PageDown
+    | PageUp
+    | ScrollDocsPageDown
+    | ScrollDocsPageUp
+    | ToggleMaximize
 
 
 handleAction : Action -> Model -> ( Model, Effect.Effect Msg )
 handleAction action model =
     case action of
         Quit ->
-            ( model, Effect.exit )
+            if Layout.isMaximized "docs" model.layout then
+                ( { model | layout = Layout.toggleMaximize "docs" model.layout }
+                , Effect.none
+                )
+
+            else
+                ( model, Effect.exit )
 
         NavigateDown ->
-            ( { model | layout = Layout.navigateDown "modules" model.layout }
-            , Effect.none
-            )
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                paneId =
+                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
+
+                ( newLayout, maybeMsg ) =
+                    Layout.navigateDown paneId (viewLayout ctx model) model.layout
+            in
+            case maybeMsg of
+                Just subMsg ->
+                    update subMsg { model | layout = newLayout }
+
+                Nothing ->
+                    ( { model | layout = newLayout }
+                    , Effect.none
+                    )
 
         NavigateUp ->
-            ( { model | layout = Layout.navigateUp "modules" model.layout }
-            , Effect.none
-            )
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                paneId =
+                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
+
+                ( newLayout, maybeMsg ) =
+                    Layout.navigateUp paneId (viewLayout ctx model) model.layout
+            in
+            case maybeMsg of
+                Just subMsg ->
+                    update subMsg { model | layout = newLayout }
+
+                Nothing ->
+                    ( { model | layout = newLayout }
+                    , Effect.none
+                    )
 
         FocusModules ->
             ( { model | layout = Layout.focusPane "modules" model.layout }
             , Effect.none
             )
 
+        FocusItems ->
+            ( { model | layout = Layout.focusPane "items" model.layout }
+            , Effect.none
+            )
+
         FocusDocs ->
             ( { model | layout = Layout.focusPane "docs" model.layout }
+            , Effect.none
+            )
+
+        FocusLeft ->
+            let
+                newPane =
+                    case Layout.focusedPane model.layout of
+                        Just "docs" ->
+                            "items"
+
+                        Just "items" ->
+                            "modules"
+
+                        _ ->
+                            "modules"
+            in
+            ( { model | layout = Layout.focusPane newPane model.layout }
+            , Effect.none
+            )
+
+        FocusRight ->
+            let
+                newPane =
+                    case Layout.focusedPane model.layout of
+                        Just "modules" ->
+                            "items"
+
+                        Just "items" ->
+                            "docs"
+
+                        _ ->
+                            "docs"
+            in
+            ( { model | layout = Layout.focusPane newPane model.layout }
             , Effect.none
             )
 
@@ -272,21 +447,32 @@ handleAction action model =
             ( { model | showHelp = False }, Effect.none )
 
         ToggleDiffView ->
-            case model.diff of
-                Just _ ->
-                    let
-                        newView =
-                            case model.rightView of
-                                DocsView ->
-                                    DiffView
+            if model.loadingDiff then
+                ( model, Effect.none )
 
-                                DiffView ->
-                                    DocsView
-                    in
-                    ( { model | rightView = newView }, Effect.none )
+            else
+                case model.diff of
+                    Just _ ->
+                        let
+                            newView =
+                                case model.rightView of
+                                    DocsView ->
+                                        DiffView
 
-                Nothing ->
-                    ( model, Effect.none )
+                                    DiffView ->
+                                        DocsView
+                        in
+                        ( { model | rightView = newView }, Effect.none )
+
+                    Nothing ->
+                        case model.versions of
+                            firstVersion :: _ ->
+                                ( { model | loadingDiff = True, diffVersion = Just firstVersion }
+                                , Effect.perform GotDiff (model.loadDiff firstVersion)
+                                )
+
+                            [] ->
+                                ( model, Effect.none )
 
         ToggleTreeNode ->
             case selectedEntry model of
@@ -299,38 +485,197 @@ handleAction action model =
                     ( model, Effect.none )
 
         SwitchToModulesTab ->
-            ( { model | activeLeftTab = ModulesTab }, Effect.none )
+            ( { model | activeLeftTab = ModulesTab, rightView = DocsView }, Effect.none )
 
         SwitchToChangesTab ->
             case model.diff of
                 Just _ ->
-                    ( { model | activeLeftTab = ChangesTab }, Effect.none )
+                    ( { model | activeLeftTab = ChangesTab, rightView = DiffView }, Effect.none )
 
                 Nothing ->
-                    ( model, Effect.none )
+                    case model.versions of
+                        firstVersion :: _ ->
+                            if model.loadingDiff then
+                                ( { model | activeLeftTab = ChangesTab, rightView = DiffView }, Effect.none )
+
+                            else
+                                ( { model
+                                    | activeLeftTab = ChangesTab
+                                    , rightView = DiffView
+                                    , loadingDiff = True
+                                    , diffVersion = Just firstVersion
+                                  }
+                                , Effect.perform GotDiff (model.loadDiff firstVersion)
+                                )
+
+                        [] ->
+                            ( model, Effect.none )
 
         CycleLeftTab ->
-            case model.diff of
-                Just _ ->
-                    let
-                        nextTab =
-                            case model.activeLeftTab of
-                                ModulesTab ->
-                                    ChangesTab
+            let
+                hasChangesTab =
+                    model.diff /= Nothing || not (List.isEmpty model.versions)
 
-                                ChangesTab ->
-                                    ModulesTab
-                    in
-                    ( { model | activeLeftTab = nextTab }, Effect.none )
+                hasVersionsTab =
+                    not (List.isEmpty model.versions)
 
-                Nothing ->
-                    ( model, Effect.none )
+                nextTab =
+                    case model.activeLeftTab of
+                        ModulesTab ->
+                            if hasChangesTab then
+                                ChangesTab
+
+                            else if hasVersionsTab then
+                                VersionsTab
+
+                            else
+                                ModulesTab
+
+                        ChangesTab ->
+                            if hasVersionsTab then
+                                VersionsTab
+
+                            else
+                                ModulesTab
+
+                        VersionsTab ->
+                            ModulesTab
+            in
+            let
+                newRightView =
+                    case nextTab of
+                        ChangesTab ->
+                            DiffView
+
+                        _ ->
+                            DocsView
+            in
+            if nextTab == ChangesTab && model.diff == Nothing then
+                -- Need to load diff first
+                case model.versions of
+                    firstVersion :: _ ->
+                        if model.loadingDiff then
+                            ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
+
+                        else
+                            ( { model
+                                | activeLeftTab = nextTab
+                                , rightView = newRightView
+                                , loadingDiff = True
+                                , diffVersion = Just firstVersion
+                              }
+                            , Effect.perform GotDiff (model.loadDiff firstVersion)
+                            )
+
+                    [] ->
+                        ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
+
+            else
+                ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
 
         ActivateFilter ->
             ( { model | filterInput = Just (Input.init "") }, Effect.none )
 
         CancelFilter ->
             ( { model | filterInput = Nothing }, Effect.none )
+
+        SwitchToVersionsTab ->
+            if List.isEmpty model.versions then
+                ( model, Effect.none )
+
+            else
+                ( { model | activeLeftTab = VersionsTab }, Effect.none )
+
+        LoadDiffForVersion ->
+            if model.loadingDiff then
+                ( model, Effect.none )
+
+            else
+                case selectedEntry model of
+                    Just (Leaf { name }) ->
+                        ( { model | loadingDiff = True, diffVersion = Just name }
+                        , Effect.perform GotDiff (model.loadDiff name)
+                        )
+
+                    _ ->
+                        ( model, Effect.none )
+
+        PageDown ->
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                paneId =
+                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
+
+                pageSize =
+                    max 1 ((ctx.height - 4) // 2)
+
+                step i ( m, _ ) =
+                    if i <= 0 then
+                        ( m, Effect.none )
+
+                    else
+                        let
+                            ( newLayout, _ ) =
+                                Layout.navigateDown paneId (viewLayout ctx m) m.layout
+                        in
+                        step (i - 1) ( { m | layout = newLayout }, Effect.none )
+            in
+            step pageSize ( model, Effect.none )
+
+        PageUp ->
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                paneId =
+                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
+
+                pageSize =
+                    max 1 ((ctx.height - 4) // 2)
+
+                step i ( m, _ ) =
+                    if i <= 0 then
+                        ( m, Effect.none )
+
+                    else
+                        let
+                            ( newLayout, _ ) =
+                                Layout.navigateUp paneId (viewLayout ctx m) m.layout
+                        in
+                        step (i - 1) ( { m | layout = newLayout }, Effect.none )
+            in
+            step pageSize ( model, Effect.none )
+
+        ScrollDocsPageDown ->
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                pageSize =
+                    max 1 (ctx.height - 4)
+            in
+            ( { model | layout = Layout.scrollDown "docs" pageSize model.layout }
+            , Effect.none
+            )
+
+        ScrollDocsPageUp ->
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                pageSize =
+                    max 1 (ctx.height - 4)
+            in
+            ( { model | layout = Layout.scrollUp "docs" pageSize model.layout }
+            , Effect.none
+            )
+
+        ToggleMaximize ->
+            ( { model | layout = Layout.toggleMaximize "docs" model.layout }
+            , Effect.none
+            )
 
 
 
@@ -340,28 +685,54 @@ handleAction action model =
 globalBindings : Model -> Keybinding.Group Action
 globalBindings model =
     let
-        diffBindings =
-            case model.diff of
-                Just _ ->
-                    [ Keybinding.binding (Tui.Character 'd') "Toggle diff view" ToggleDiffView
-                    , Keybinding.binding (Tui.Character '2') "Changes tab" SwitchToChangesTab
-                    , Keybinding.binding Tui.Tab "Cycle tabs" CycleLeftTab
-                    ]
+        hasDiff =
+            model.diff /= Nothing
 
-                Nothing ->
-                    []
+        hasVersions =
+            not (List.isEmpty model.versions)
+
+        diffToggleBinding =
+            if hasDiff || hasVersions then
+                [ Keybinding.binding (Tui.Character 'd') "Toggle diff view" ToggleDiffView ]
+
+            else
+                []
+
+        changesTabBinding =
+            if hasDiff || hasVersions then
+                [ Keybinding.binding (Tui.Character '2') "Changes tab" SwitchToChangesTab ]
+
+            else
+                []
+
+        versionsTabBinding =
+            if hasVersions then
+                [ Keybinding.binding (Tui.Character '3') "Versions tab" SwitchToVersionsTab ]
+
+            else
+                []
+
+        cycleBinding =
+            if hasDiff || hasVersions then
+                [ Keybinding.binding Tui.Tab "Cycle tabs" CycleLeftTab ]
+
+            else
+                []
     in
     Keybinding.group "Global"
         ([ Keybinding.binding (Tui.Character 'q') "Quit" Quit
          , Keybinding.binding Tui.Escape "Quit" Quit
          , Keybinding.binding (Tui.Character '?') "Toggle help" ToggleHelp
-         , Keybinding.binding (Tui.Character 'h') "Focus modules" FocusModules
+         , Keybinding.binding (Tui.Character 'h') "Focus left" FocusLeft
              |> Keybinding.withAlternate (Tui.Arrow Tui.Left)
-         , Keybinding.binding (Tui.Character 'l') "Focus docs" FocusDocs
+         , Keybinding.binding (Tui.Character 'l') "Focus right" FocusRight
              |> Keybinding.withAlternate (Tui.Arrow Tui.Right)
          , Keybinding.binding (Tui.Character '1') "Modules tab" SwitchToModulesTab
          ]
-            ++ diffBindings
+            ++ diffToggleBinding
+            ++ changesTabBinding
+            ++ versionsTabBinding
+            ++ cycleBinding
         )
 
 
@@ -374,15 +745,42 @@ helpBindings =
         ]
 
 
-modulesBindings : Keybinding.Group Action
-modulesBindings =
+modulesBindings : Model -> Keybinding.Group Action
+modulesBindings model =
+    let
+        enterAction =
+            case model.activeLeftTab of
+                VersionsTab ->
+                    LoadDiffForVersion
+
+                _ ->
+                    ToggleTreeNode
+    in
     Keybinding.group "Modules"
         [ Keybinding.binding (Tui.Character 'j') "Next module" NavigateDown
             |> Keybinding.withAlternate (Tui.Arrow Tui.Down)
         , Keybinding.binding (Tui.Character 'k') "Previous module" NavigateUp
             |> Keybinding.withAlternate (Tui.Arrow Tui.Up)
-        , Keybinding.binding Tui.Enter "Toggle group" ToggleTreeNode
+        , Keybinding.binding (Tui.Character '>') "Page down" PageDown
+            |> Keybinding.withAlternate Tui.PageDown
+        , Keybinding.binding (Tui.Character '<') "Page up" PageUp
+            |> Keybinding.withAlternate Tui.PageUp
+        , Keybinding.binding Tui.Enter "Select" enterAction
         , Keybinding.binding (Tui.Character '/') "Filter" ActivateFilter
+        ]
+
+
+itemsBindings : Keybinding.Group Action
+itemsBindings =
+    Keybinding.group "Items"
+        [ Keybinding.binding (Tui.Character 'j') "Next item" NavigateDown
+            |> Keybinding.withAlternate (Tui.Arrow Tui.Down)
+        , Keybinding.binding (Tui.Character 'k') "Previous item" NavigateUp
+            |> Keybinding.withAlternate (Tui.Arrow Tui.Up)
+        , Keybinding.binding (Tui.Character '>') "Page down" PageDown
+            |> Keybinding.withAlternate Tui.PageDown
+        , Keybinding.binding (Tui.Character '<') "Page up" PageUp
+            |> Keybinding.withAlternate Tui.PageUp
         ]
 
 
@@ -393,6 +791,12 @@ docsBindings =
             |> Keybinding.withAlternate (Tui.Arrow Tui.Down)
         , Keybinding.binding (Tui.Character 'k') "Scroll up" ScrollDocsUp
             |> Keybinding.withAlternate (Tui.Arrow Tui.Up)
+        , Keybinding.binding (Tui.Character ' ') "Page down" ScrollDocsPageDown
+            |> Keybinding.withAlternate (Tui.Character '>')
+        , Keybinding.binding Tui.PageDown "Page down" ScrollDocsPageDown
+        , Keybinding.binding (Tui.Character '<') "Page up" ScrollDocsPageUp
+            |> Keybinding.withAlternate Tui.PageUp
+        , Keybinding.binding (Tui.Character 'o') "Maximize" ToggleMaximize
         ]
 
 
@@ -408,8 +812,11 @@ allBindings model =
                     Just "docs" ->
                         [ docsBindings ]
 
+                    Just "items" ->
+                        [ itemsBindings ]
+
                     _ ->
-                        [ modulesBindings ]
+                        [ modulesBindings model ]
         in
         focusedBindings ++ [ globalBindings model ]
 
@@ -436,7 +843,7 @@ view ctx model =
     if model.showHelp then
         let
             helpBody =
-                Keybinding.helpRows "" [ modulesBindings, docsBindings, globalBindings model ]
+                Keybinding.helpRows "" [ modulesBindings model, docsBindings, globalBindings model ]
         in
         Modal.overlay
             { title = "Keybindings"
@@ -458,6 +865,7 @@ viewLayout : { a | width : Int, height : Int } -> Model -> Layout.Layout Msg
 viewLayout ctx model =
     Layout.horizontal
         [ modulesPane ctx model
+        , itemsPane model
         , rightPane ctx model
         ]
 
@@ -475,15 +883,37 @@ renderStatusBar model width =
                         base =
                             [ "j/k navigate", "/filter", "? help", "q quit" ]
 
-                        diffHints =
-                            case model.diff of
-                                Just _ ->
-                                    [ "d diff", "1/2 tabs" ]
+                        hasDiff =
+                            model.diff /= Nothing
 
-                                Nothing ->
+                        hasVersions =
+                            not (List.isEmpty model.versions)
+
+                        diffHint =
+                            if hasDiff || hasVersions then
+                                [ "d diff" ]
+
+                            else
+                                []
+
+                        showChanges =
+                            hasDiff || hasVersions
+
+                        tabHint =
+                            case ( showChanges, hasVersions ) of
+                                ( True, True ) ->
+                                    [ "1/2/3 tabs" ]
+
+                                ( True, False ) ->
+                                    [ "1/2 tabs" ]
+
+                                ( False, True ) ->
+                                    [ "1/3 tabs" ]
+
+                                ( False, False ) ->
                                     []
                     in
-                    base ++ diffHints
+                    base ++ diffHint ++ tabHint
 
         hintText =
             String.join "  " hints
@@ -502,22 +932,94 @@ renderStatusBar model width =
 
 modulesPaneWidth : Int -> Layout.Width
 modulesPaneWidth termWidth =
-    Layout.px (min 40 (termWidth // 3))
+    Layout.px (min 28 (termWidth // 4))
 
 
 leftPaneTitle : Model -> String
 leftPaneTitle model =
-    case model.diff of
-        Just _ ->
-            case model.activeLeftTab of
-                ModulesTab ->
-                    "[1]Modules [2]Changes"
+    let
+        hasDiff =
+            model.diff /= Nothing
 
-                ChangesTab ->
-                    "[1]Modules [2]Changes"
+        hasVersions =
+            not (List.isEmpty model.versions)
 
-        Nothing ->
+        showChanges =
+            hasDiff || hasVersions
+    in
+    case ( showChanges, hasVersions ) of
+        ( True, True ) ->
+            "[1]Modules [2]Changes [3]Versions"
+
+        ( True, False ) ->
+            "[1]Modules [2]Changes"
+
+        ( False, True ) ->
+            "[1]Modules [3]Versions"
+
+        ( False, False ) ->
             "Modules"
+
+
+leftPaneTitleScreen : Model -> Maybe Tui.Screen
+leftPaneTitleScreen model =
+    let
+        hasDiff =
+            model.diff /= Nothing
+
+        hasVersions =
+            not (List.isEmpty model.versions)
+
+        tab : String -> String -> LeftTab -> Tui.Screen
+        tab number label tabType =
+            if model.activeLeftTab == tabType then
+                Tui.concat
+                    [ Tui.text number |> Tui.bold |> Tui.fg Ansi.Color.cyan
+                    , Tui.text label |> Tui.bold
+                    ]
+
+            else
+                Tui.text (number ++ label) |> Tui.dim
+
+        separator =
+            Tui.text " "
+    in
+    let
+        showChanges =
+            hasDiff || hasVersions
+    in
+    case ( showChanges, hasVersions ) of
+        ( True, True ) ->
+            Just
+                (Tui.concat
+                    [ tab "[1]" "Modules" ModulesTab
+                    , separator
+                    , tab "[2]" "Changes" ChangesTab
+                    , separator
+                    , tab "[3]" "Versions" VersionsTab
+                    ]
+                )
+
+        ( True, False ) ->
+            Just
+                (Tui.concat
+                    [ tab "[1]" "Modules" ModulesTab
+                    , separator
+                    , tab "[2]" "Changes" ChangesTab
+                    ]
+                )
+
+        ( False, True ) ->
+            Just
+                (Tui.concat
+                    [ tab "[1]" "Modules" ModulesTab
+                    , separator
+                    , tab "[3]" "Versions" VersionsTab
+                    ]
+                )
+
+        ( False, False ) ->
+            Nothing
 
 
 modulesPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
@@ -533,17 +1035,29 @@ modulesPane ctx model =
             (model.rightView == DiffView || model.activeLeftTab == ChangesTab)
                 && model.diff /= Nothing
     in
-    Layout.pane "modules"
-        { title = leftPaneTitle model
-        , width = modulesPaneWidth ctx.width
-        }
-        (Layout.selectableList
-            { onSelect = SelectEntry
-            , selected = \entry -> renderTreeEntrySelected showBadges model entry
-            , default = \entry -> renderTreeEntryDefault showBadges model entry
-            }
-            entries
-        )
+    let
+        pane =
+            Layout.pane "modules"
+                { title = leftPaneTitle model
+                , width = modulesPaneWidth ctx.width
+                }
+                (Layout.selectableList
+                    { onSelect = SelectEntry
+                    , selected = \entry -> renderTreeEntrySelected showBadges model entry
+                    , default = \entry -> renderTreeEntryDefault showBadges model entry
+                    }
+                    entries
+                )
+
+        styledPane =
+            case leftPaneTitleScreen model of
+                Just titleScreen ->
+                    pane |> Layout.withTitleScreen titleScreen
+
+                Nothing ->
+                    pane
+    in
+    styledPane
         |> Layout.withPrefix ("[" ++ String.fromInt entryCount ++ "] ")
         |> Layout.withFooter
             (case model.filterInput of
@@ -555,6 +1069,154 @@ modulesPane ctx model =
                         ++ " of "
                         ++ String.fromInt entryCount
             )
+
+
+itemsForCurrentView : Model -> List String
+itemsForCurrentView model =
+    case model.rightView of
+        DiffView ->
+            case ( model.diff, selectedEntry model ) of
+                ( Just diff, Just (Leaf { name }) ) ->
+                    if List.member name diff.addedModules then
+                        -- New module: show all items from the module
+                        case findModule name model.modules of
+                            Just mod ->
+                                moduleItemNames mod
+
+                            Nothing ->
+                                []
+
+                    else
+                        diffItemNames diff name
+
+                _ ->
+                    []
+
+        DocsView ->
+            case selectedModule model of
+                Just mod ->
+                    moduleItemNames mod
+
+                Nothing ->
+                    []
+
+
+diffItemNames : ApiDiff -> String -> List String
+diffItemNames diff moduleName =
+    case Diff.findModuleChanges moduleName diff.changedModules of
+        Just changes ->
+            changes.added ++ changes.changed ++ changes.removed
+
+        Nothing ->
+            if List.member moduleName diff.addedModules then
+                -- New module: show all items
+                []
+
+            else
+                []
+
+
+itemsPane : Model -> Layout.Pane Msg
+itemsPane model =
+    let
+        items =
+            itemsForCurrentView model
+
+        itemCount =
+            List.length items
+    in
+    Layout.pane "items"
+        { title = "Items"
+        , width = Layout.px 20
+        }
+        (Layout.selectableList
+            { onSelect = SelectItem
+            , selected =
+                \name ->
+                    Tui.styled
+                        { fg = Just Ansi.Color.white
+                        , bg = Just Ansi.Color.blue
+                        , attributes = [ Tui.Bold ]
+                        }
+                        (name ++ " ")
+            , default = \name -> Tui.text name
+            }
+            items
+        )
+        |> Layout.withFooter
+            (if itemCount > 0 then
+                String.fromInt (Layout.selectedIndex "items" model.layout + 1)
+                    ++ " of "
+                    ++ String.fromInt itemCount
+
+             else
+                ""
+            )
+
+
+currentDocsContent : Model -> List Tui.Screen
+currentDocsContent model =
+    case model.rightView of
+        DocsView ->
+            case selectedModule model of
+                Just mod ->
+                    renderModuleDocs mod
+
+                Nothing ->
+                    []
+
+        DiffView ->
+            case ( model.diff, selectedEntry model ) of
+                ( Just diff, Just (Leaf { name }) ) ->
+                    if name == "README" then
+                        renderReadmeDiff diff
+
+                    else
+                        [ magnitudeLine diff.magnitude, Tui.text "" ]
+                            ++ renderModuleDiff diff model.modules name
+
+                _ ->
+                    []
+
+
+findLineForItem : String -> List Tui.Screen -> Int
+findLineForItem itemName lines =
+    lines
+        |> List.indexedMap Tuple.pair
+        |> List.filter
+            (\( _, line ) ->
+                let
+                    text =
+                        Tui.toString line
+                in
+                String.contains itemName text
+                    && (String.contains (itemName ++ " :") text
+                            || String.contains (itemName ++ " =") text
+                            || String.contains ("type " ++ itemName) text
+                            || String.contains ("type alias " ++ itemName) text
+                       )
+            )
+        |> List.head
+        |> Maybe.map Tuple.first
+        |> Maybe.withDefault 0
+
+
+moduleItemNames : Docs.Module -> List String
+moduleItemNames mod =
+    let
+        valueNames =
+            List.map .name mod.values
+
+        unionNames =
+            List.map .name mod.unions
+
+        aliasNames =
+            List.map .name mod.aliases
+
+        binopNames =
+            List.map .name mod.binops
+    in
+    valueNames ++ unionNames ++ aliasNames ++ binopNames
 
 
 renderTreeEntrySelected : Bool -> Model -> TreeEntry -> Tui.Screen
@@ -593,9 +1255,9 @@ renderTreeEntrySelected showBadges model entry =
     Tui.concat
         [ badge
         , Tui.styled
-            { fg = Nothing
-            , bg = Nothing
-            , attributes = [ Tui.Bold, Tui.Inverse ]
+            { fg = Just Ansi.Color.white
+            , bg = Just Ansi.Color.blue
+            , attributes = [ Tui.Bold ]
             }
             (indent ++ prefix ++ name ++ " ")
         ]
@@ -667,12 +1329,26 @@ moduleBadge model moduleName =
 
 rightPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
 rightPane _ model =
-    case model.rightView of
-        DocsView ->
-            docsPane model
+    if model.loadingDiff then
+        Layout.pane "docs"
+            { title = "Loading..."
+            , width = Layout.fill
+            }
+            (Layout.content
+                [ Tui.concat
+                    [ Tui.text "Loading diff... " |> Tui.dim
+                    , Tui.Spinner.view model.spinnerTick
+                    ]
+                ]
+            )
 
-        DiffView ->
-            diffPane model
+    else
+        case model.rightView of
+            DocsView ->
+                docsPane model
+
+            DiffView ->
+                diffPane model
 
 
 docsPane : Model -> Layout.Pane Msg
@@ -699,6 +1375,7 @@ docsPane model =
         , width = Layout.fill
         }
         (Layout.content docsLines)
+        |> withScrollPercentFooter model docsLines
 
 
 diffPane : Model -> Layout.Pane Msg
@@ -716,7 +1393,11 @@ diffPane model =
                         entryDiffLines =
                             case selectedEntry model of
                                 Just (Leaf { name }) ->
-                                    renderModuleDiff diff model.modules name
+                                    if name == "README" then
+                                        renderReadmeDiff diff
+
+                                    else
+                                        renderModuleDiff diff model.modules name
 
                                 _ ->
                                     [ Tui.text "No module selected" ]
@@ -726,11 +1407,52 @@ diffPane model =
                 Nothing ->
                     [ Tui.text "No diff data" ]
     in
+    let
+        title =
+            case model.diffVersion of
+                Just version ->
+                    "Diff vs " ++ version
+
+                Nothing ->
+                    "Diff"
+    in
     Layout.pane "docs"
-        { title = "Diff"
+        { title = title
         , width = Layout.fill
         }
         (Layout.content diffLines)
+
+
+
+withScrollPercentFooter : Model -> List Tui.Screen -> Layout.Pane Msg -> Layout.Pane Msg
+withScrollPercentFooter model contentLines pane =
+    let
+        ctx =
+            Layout.contextOf model.layout
+
+        totalLines =
+            List.length contentLines
+
+        visibleHeight =
+            ctx.height - 2
+
+        scrollOffset =
+            Layout.scrollPosition "docs" model.layout
+
+        percent =
+            if totalLines <= visibleHeight then
+                ""
+
+            else
+                String.fromInt (min 100 (scrollOffset * 100 // max 1 (totalLines - visibleHeight))) ++ "%"
+    in
+    if String.isEmpty percent then
+        pane
+
+    else
+        pane
+            |> Layout.withFooterScreen
+                (Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } percent)
 
 
 
@@ -739,15 +1461,25 @@ diffPane model =
 
 renderModuleDocs : Docs.Module -> List Tui.Screen
 renderModuleDocs mod =
-    Docs.toBlocks mod
+    let
+        blocks =
+            Docs.toBlocks mod
+
+        separator =
+            [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+                (String.repeat 40 "─")
+            , Tui.text ""
+            ]
+    in
+    blocks
         |> List.concatMap
             (\block ->
                 case block of
                     Docs.MarkdownBlock _ ->
-                        []
+                        renderBlock block ++ [ Tui.text "" ]
 
                     _ ->
-                        renderBlock block ++ [ Tui.text "" ]
+                        separator ++ renderBlock block ++ [ Tui.text "" ]
             )
 
 
@@ -756,40 +1488,71 @@ renderBlock block =
     case block of
         Docs.ValueBlock value ->
             renderValueTui value
+                |> addGutter Ansi.Color.blue
 
         Docs.UnionBlock union ->
             renderUnionTui union
+                |> addGutter Ansi.Color.green
 
         Docs.AliasBlock alias_ ->
             renderAliasTui alias_
+                |> addGutter Ansi.Color.yellow
 
         Docs.BinopBlock binop ->
             renderBinopTui binop
+                |> addGutter Ansi.Color.magenta
 
-        Docs.MarkdownBlock _ ->
-            []
+        Docs.MarkdownBlock markdown ->
+            renderMarkdownToScreens (String.trim markdown)
 
         Docs.UnknownBlock name ->
             [ Tui.text ("  (unknown: " ++ name ++ ")") ]
 
 
+addGutter : Ansi.Color.Color -> List Tui.Screen -> List Tui.Screen
+addGutter color lines =
+    let
+        gutterChar =
+            Tui.styled { fg = Just color, bg = Nothing, attributes = [] } "┃ "
+    in
+    List.map (\line -> Tui.concat [ gutterChar, line ]) lines
+
+
 renderValueTui : Docs.Value -> List Tui.Screen
 renderValueTui { name, comment, tipe } =
     let
-        typeStr =
-            Render.typeToString tipe
+        prefixWidth =
+            String.length name + 3
+
+        typeLines =
+            Render.typeToLines prefixWidth tipe
 
         header =
-            Tui.concat
-                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
-                , Tui.text " : "
-                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } typeStr
-                ]
+            case typeLines of
+                [ oneLine ] ->
+                    [ Tui.concat
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
+                        , Tui.text " : "
+                        , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } oneLine
+                        ]
+                    ]
+
+                multipleLines ->
+                    Tui.concat
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
+                        , Tui.text " :"
+                        ]
+                        :: List.map
+                            (\line ->
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                    ("    " ++ line)
+                            )
+                            multipleLines
 
         commentLines =
             renderDocComment comment
     in
-    header :: commentLines
+    header ++ commentLines
 
 
 renderUnionTui : Docs.Union -> List Tui.Screen
@@ -853,14 +1616,18 @@ renderAliasTui { name, comment, args, tipe } =
             Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
                 ("type alias " ++ name ++ typeVars ++ " =")
 
-        typeBody =
-            Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
-                ("    " ++ Render.typeToString tipe)
+        typeBodyLines =
+            Render.typeToLines 6 tipe
+                |> List.map
+                    (\line ->
+                        Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                            ("    " ++ line)
+                    )
 
         commentLines =
             renderDocComment comment
     in
-    header :: typeBody :: commentLines
+    header :: typeBodyLines ++ commentLines
 
 
 renderBinopTui : Docs.Binop -> List Tui.Screen
@@ -869,17 +1636,38 @@ renderBinopTui { name, comment, tipe } =
         displayName =
             "(" ++ name ++ ")"
 
+        prefixWidth =
+            String.length displayName + 3
+
+        typeLines =
+            Render.typeToLines prefixWidth tipe
+
         header =
-            Tui.concat
-                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
-                , Tui.text " : "
-                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } (Render.typeToString tipe)
-                ]
+            case typeLines of
+                [ oneLine ] ->
+                    [ Tui.concat
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
+                        , Tui.text " : "
+                        , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } oneLine
+                        ]
+                    ]
+
+                multipleLines ->
+                    Tui.concat
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
+                        , Tui.text " :"
+                        ]
+                        :: List.map
+                            (\line ->
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                    ("    " ++ line)
+                            )
+                            multipleLines
 
         commentLines =
             renderDocComment comment
     in
-    header :: commentLines
+    header ++ commentLines
 
 
 renderDocComment : String -> List Tui.Screen
@@ -893,14 +1681,306 @@ renderDocComment comment =
 
     else
         Tui.text ""
-            :: (trimmed
-                    |> String.lines
-                    |> List.map
-                        (\line ->
-                            Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
-                                ("    " ++ line)
-                        )
-               )
+            :: renderMarkdownToScreens trimmed
+            |> List.map (indentScreen "    ")
+
+
+{-| Indent a screen line by prepending a string. For concat/styled screens
+this prepends to the first element; for text it prepends directly.
+-}
+indentScreen : String -> Tui.Screen -> Tui.Screen
+indentScreen prefix screen =
+    Tui.concat [ Tui.text prefix, screen ]
+
+
+
+-- MARKDOWN RENDERING TO TUI SCREENS
+
+
+renderMarkdownToScreens : String -> List Tui.Screen
+renderMarkdownToScreens markdown =
+    case
+        markdown
+            |> Markdown.Parser.parse
+            |> Result.mapError (\_ -> "parse error")
+            |> Result.andThen (Markdown.Renderer.render tuiRenderer)
+    of
+        Ok rendered ->
+            List.concat rendered
+
+        Err _ ->
+            -- Fallback: raw text
+            markdown
+                |> String.lines
+                |> List.map Tui.text
+
+
+{-| The markdown renderer produces `List Tui.Screen` per block.
+
+Inline elements (text, codeSpan, strong, link, etc.) each return a single-element
+list containing one `Tui.Screen` fragment. Block elements (paragraph, heading,
+list) concat all inline children into a single line via `Tui.concat`, then return
+that as a `List Tui.Screen` (possibly multiple lines for lists/blockquotes).
+
+-}
+tuiRenderer : Renderer (List Tui.Screen)
+tuiRenderer =
+    { heading = tuiHeading
+    , paragraph = tuiParagraph
+    , blockQuote = tuiBlockQuote
+    , html = Markdown.Html.oneOf []
+    , text = \s -> [ Tui.text (String.replace "\n" " " s) ]
+    , codeSpan = \code -> [ Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } code ]
+    , strong = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } (inlineChildrenToString children) ]
+    , emphasis = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Italic ] } (inlineChildrenToString children) ]
+    , strikethrough = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Strikethrough ] } (inlineChildrenToString children) ]
+    , hardLineBreak = [ Tui.text "\n" ]
+    , link = tuiLink
+    , image = tuiImage
+    , unorderedList = tuiUnorderedList
+    , orderedList = tuiOrderedList
+    , codeBlock = tuiCodeBlock
+    , thematicBreak = [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } (String.repeat 40 "─") ]
+    , table = \children -> List.concat children
+    , tableHeader = \children -> List.concat children
+    , tableBody = \children -> List.concat children
+    , tableRow = \children -> [ Tui.concat (List.concatMap (\c -> Tui.text "| " :: c) children ++ [ Tui.text " |" ]) ]
+    , tableCell = \_ children -> List.concat children
+    , tableHeaderCell = \_ children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } (inlineChildrenToString children) ]
+    }
+
+
+{-| Flatten inline children (from the markdown renderer) into a single plain string.
+Used when we need to wrap the combined text in a single Tui.styled call.
+-}
+inlineChildrenToString : List (List Tui.Screen) -> String
+inlineChildrenToString children =
+    children
+        |> List.concat
+        |> List.map Tui.toString
+        |> String.join ""
+
+
+{-| Combine inline children into a single Tui.Screen by concatenating fragments.
+This is the key to keeping paragraph text on one line instead of splitting each
+inline element onto its own line.
+-}
+flattenInlineChildren : List (List Tui.Screen) -> Tui.Screen
+flattenInlineChildren children =
+    Tui.concat (List.concat children)
+
+
+tuiHeading : { level : Markdown.Block.HeadingLevel, rawText : String, children : List (List Tui.Screen) } -> List Tui.Screen
+tuiHeading { level, children } =
+    let
+        prefix =
+            case level of
+                Markdown.Block.H1 ->
+                    "# "
+
+                Markdown.Block.H2 ->
+                    "## "
+
+                Markdown.Block.H3 ->
+                    "### "
+
+                _ ->
+                    "#### "
+    in
+    [ Tui.text ""
+    , Tui.styled { fg = Just Ansi.Color.magenta, bg = Nothing, attributes = [ Tui.Bold ] }
+        (prefix ++ inlineChildrenToString children)
+    ]
+
+
+tuiParagraph : List (List Tui.Screen) -> List Tui.Screen
+tuiParagraph children =
+    [ flattenInlineChildren children, Tui.text "" ]
+
+
+tuiBlockQuote : List (List Tui.Screen) -> List Tui.Screen
+tuiBlockQuote children =
+    let
+        allText =
+            inlineChildrenToString children
+    in
+    allText
+        |> String.lines
+        |> List.map
+            (\line ->
+                Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+                    ("> " ++ line)
+            )
+
+
+tuiLink : { title : Maybe String, destination : String } -> List (List Tui.Screen) -> List Tui.Screen
+tuiLink { destination } children =
+    [ Tui.concat
+        [ Tui.styled { fg = Just Ansi.Color.blue, bg = Nothing, attributes = [ Tui.Underline ] }
+            (inlineChildrenToString children)
+        , Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+            (" (" ++ destination ++ ")")
+        ]
+    ]
+
+
+tuiImage : { alt : String, src : String, title : Maybe String } -> List Tui.Screen
+tuiImage { alt, src } =
+    [ Tui.concat
+        [ Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } ("[image: " ++ alt ++ "]")
+        , Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } (" (" ++ src ++ ")")
+        ]
+    ]
+
+
+tuiUnorderedList : List (ListItem (List Tui.Screen)) -> List Tui.Screen
+tuiUnorderedList items =
+    List.concatMap
+        (\(ListItem task children) ->
+            let
+                bullet =
+                    case task of
+                        NoTask ->
+                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } "  * "
+
+                        IncompleteTask ->
+                            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } "  [ ] "
+
+                        CompletedTask ->
+                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } "  [x] "
+
+                -- Each child is a block (usually a paragraph) which is List Tui.Screen.
+                -- Flatten all children into one line for simple list items.
+                childContent =
+                    flattenInlineChildren children
+            in
+            [ Tui.concat [ bullet, childContent ] ]
+        )
+        items
+
+
+tuiOrderedList : Int -> List (List (List Tui.Screen)) -> List Tui.Screen
+tuiOrderedList startIndex items =
+    List.indexedMap
+        (\i children ->
+            let
+                num =
+                    String.fromInt (startIndex + i) ++ ". "
+
+                numScreen =
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } ("  " ++ num)
+
+                childContent =
+                    flattenInlineChildren children
+            in
+            [ Tui.concat [ numScreen, childContent ] ]
+        )
+        items
+        |> List.concat
+
+
+tuiCodeBlock : { body : String, language : Maybe String } -> List Tui.Screen
+tuiCodeBlock { body, language } =
+    let
+        lang =
+            language |> Maybe.withDefault "elm"
+
+        trimmedBody =
+            String.trimRight body
+    in
+    highlightCodeToScreens lang trimmedBody
+
+
+
+-- SYNTAX HIGHLIGHTING TO TUI SCREENS
+
+
+highlightCodeToScreens : String -> String -> List Tui.Screen
+highlightCodeToScreens language body =
+    let
+        parser =
+            case language of
+                "elm" ->
+                    Just SyntaxHighlight.elm
+
+                "javascript" ->
+                    Just SyntaxHighlight.javascript
+
+                "js" ->
+                    Just SyntaxHighlight.javascript
+
+                "json" ->
+                    Just SyntaxHighlight.json
+
+                "css" ->
+                    Just SyntaxHighlight.css
+
+                "xml" ->
+                    Just SyntaxHighlight.xml
+
+                "html" ->
+                    Just SyntaxHighlight.xml
+
+                "python" ->
+                    Just SyntaxHighlight.python
+
+                "py" ->
+                    Just SyntaxHighlight.python
+
+                "sql" ->
+                    Just SyntaxHighlight.sql
+
+                "go" ->
+                    Just SyntaxHighlight.go
+
+                "nix" ->
+                    Just SyntaxHighlight.nix
+
+                "kotlin" ->
+                    Just SyntaxHighlight.kotlin
+
+                _ ->
+                    Nothing
+
+        fallback =
+            body
+                |> String.lines
+                |> List.map
+                    (\line ->
+                        Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } line
+                    )
+    in
+    case parser of
+        Just parse ->
+            case parse body of
+                Ok hcode ->
+                    hcode
+                        |> SyntaxHighlight.toCustom tuiSyntaxTransform
+                        |> List.map (\lineScreen -> Tui.concat lineScreen)
+
+                Err _ ->
+                    fallback
+
+        Nothing ->
+            fallback
+
+
+tuiSyntaxTransform : SyntaxHighlight.CustomTransform Tui.Screen (List Tui.Screen)
+tuiSyntaxTransform =
+    { noOperation = identity
+    , highlight = identity
+    , addition = identity
+    , deletion = identity
+    , default = Tui.styled { fg = Just Ansi.Color.white, bg = Nothing, attributes = [] }
+    , comment = Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+    , style1 = Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+    , style2 = Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] }
+    , style3 = Tui.styled { fg = Just Ansi.Color.magenta, bg = Nothing, attributes = [] }
+    , style4 = Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] }
+    , style5 = Tui.styled { fg = Just Ansi.Color.blue, bg = Nothing, attributes = [] }
+    , style6 = Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [] }
+    , style7 = Tui.styled { fg = Just Ansi.Color.brightCyan, bg = Nothing, attributes = [] }
+    }
 
 
 
@@ -924,8 +2004,11 @@ magnitudeLine magnitude =
                 _ ->
                     Ansi.Color.white
     in
-    Tui.styled { fg = Just color, bg = Nothing, attributes = [ Tui.Bold ] }
-        ("  " ++ magnitude ++ " CHANGE")
+    Tui.concat
+        [ Tui.text "  "
+        , Tui.styled { fg = Just Ansi.Color.white, bg = Just color, attributes = [ Tui.Bold ] }
+            (" " ++ magnitude ++ " CHANGE ")
+        ]
 
 
 renderModuleDiff : ApiDiff -> List Docs.Module -> String -> List Tui.Screen
@@ -968,8 +2051,11 @@ renderNewModule : String -> Maybe Docs.Module -> List Tui.Screen
 renderNewModule moduleName maybeModule =
     let
         header =
-            [ Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] }
-                ("  New module: " ++ moduleName)
+            [ Tui.concat
+                [ Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.green, attributes = [ Tui.Bold ] } " + "
+                , Tui.text " "
+                , Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } moduleName
+                ]
             , Tui.text ""
             ]
     in
@@ -983,8 +2069,11 @@ renderNewModule moduleName maybeModule =
 
 renderRemovedModule : String -> List Tui.Screen
 renderRemovedModule moduleName =
-    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] }
-        ("  Removed module: " ++ moduleName)
+    [ Tui.concat
+        [ Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.red, attributes = [ Tui.Bold ] } " - "
+        , Tui.text " "
+        , Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold, Tui.Strikethrough ] } moduleName
+        ]
     , Tui.text ""
     ]
 
@@ -1056,10 +2145,10 @@ renderItemBlock diff moduleName itemName status maybeModule =
         badge =
             case status of
                 Diff.Added ->
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } " + "
+                    Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.green, attributes = [ Tui.Bold ] } " + "
 
                 Diff.Changed ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.yellow, attributes = [ Tui.Bold ] } " ~ "
 
                 _ ->
                     Tui.text "   "
@@ -1137,6 +2226,18 @@ findBlock name mod =
         |> List.head
 
 
+renderReadmeDiff : ApiDiff -> List Tui.Screen
+renderReadmeDiff diff =
+    case diff.readmeDiff of
+        Just readmeText ->
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  README Changes"
+                :: Tui.text ""
+                :: renderUnifiedDiffLines readmeText
+
+        Nothing ->
+            [ Tui.text "  No README changes" ]
+
+
 renderCommentDiffs : ApiDiff -> String -> List Tui.Screen
 renderCommentDiffs diff moduleName =
     case Dict.get moduleName diff.commentDiffs of
@@ -1193,9 +2294,16 @@ renderUnifiedDiffLines diffText =
 
 
 subscriptions : Model -> Tui.Sub.Sub Msg
-subscriptions _ =
+subscriptions model =
     Tui.Sub.batch
-        [ Tui.Sub.onKeyPress KeyPressed
-        , Tui.Sub.onMouse MouseEvent
-        , Tui.Sub.onContext GotContext
-        ]
+        ([ Tui.Sub.onKeyPress KeyPressed
+         , Tui.Sub.onMouse MouseEvent
+         , Tui.Sub.onContext GotContext
+         ]
+            ++ (if model.loadingDiff then
+                    [ Tui.Spinner.subscriptions SpinnerTick ]
+
+                else
+                    []
+               )
+        )

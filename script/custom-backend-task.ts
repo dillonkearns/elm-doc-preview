@@ -218,6 +218,51 @@ function hasModuleDoc(contents: string): boolean {
 }
 
 /**
+ * Read cached docs.json for a git ref. Returns null if not cached.
+ * Cache key is the resolved commit SHA.
+ */
+export async function readCachedDocs(
+  rawInput: unknown,
+  context: { cwd: string }
+): Promise<string | null> {
+  const sha = rawInput as string;
+  const cacheDir = path.join(context.cwd, ".elm-doc-cache");
+  const cachePath = path.join(cacheDir, `${sha}.json`);
+  try {
+    return fs.readFileSync(cachePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write docs.json to cache keyed by git commit SHA.
+ */
+export async function writeCachedDocs(
+  rawInput: unknown,
+  context: { cwd: string }
+): Promise<null> {
+  const input = rawInput as { sha: string; docs: string };
+  const cacheDir = path.join(context.cwd, ".elm-doc-cache");
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.writeFileSync(path.join(cacheDir, `${input.sha}.json`), input.docs);
+  return null;
+}
+
+/**
+ * Write a file to an absolute path. Creates parent directories if needed.
+ */
+export async function writeFileAt(
+  rawInput: unknown,
+  _context: unknown
+): Promise<null> {
+  const input = rawInput as { path: string; content: string };
+  fs.mkdirSync(path.dirname(input.path), { recursive: true });
+  fs.writeFileSync(input.path, input.content);
+  return null;
+}
+
+/**
  * Compute an API diff between two docs.json strings.
  * Extends the base computeDiff with comment diffs for the TUI.
  */

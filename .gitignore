@@ -20,3 +20,4 @@ script/snapshots/**/*.received.txt
 *.tgz
 npm-debug.log
 .vercel
+.elm-doc-cache

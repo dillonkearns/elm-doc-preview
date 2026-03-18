@@ -13,6 +13,7 @@ With --diff: browse + diff mode (d toggles diff view, [2] Changes tab).
 
 import BackendTask exposing (BackendTask)
 import BackendTask.Custom
+import BackendTask.Env
 import BackendTask.File
 import BackendTask.Http
 import Cli.Option as Option
@@ -22,9 +23,11 @@ import DocsTui
 import Docs.Diff as Diff exposing (ApiDiff)
 import Elm.Docs as Docs
 import FatalError exposing (FatalError)
+import FindPackage
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Pages.Script as Script exposing (Script)
+import Regex
 import Tui.Effect as Effect
 
 
@@ -95,8 +98,41 @@ type alias ElmJson =
     }
 
 
-loadDocsWithOptionalDiff : CliOptions -> BackendTask FatalError { modules : List Docs.Module, diff : Maybe ApiDiff }
+loadDocsWithOptionalDiff :
+    CliOptions
+    ->
+        BackendTask
+            FatalError
+            { modules : List Docs.Module
+            , diff : Maybe ApiDiff
+            , versions : List String
+            , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+            }
 loadDocsWithOptionalDiff options =
+    Script.command "pwd" []
+        |> BackendTask.map String.trim
+        |> BackendTask.andThen
+            (\cwd ->
+                FindPackage.findPackageElmJson cwd
+                    |> BackendTask.andThen
+                        (\found ->
+                            BackendTask.inDir found.dir
+                                (loadDocsInDir options)
+                        )
+            )
+
+
+loadDocsInDir :
+    CliOptions
+    ->
+        BackendTask
+            FatalError
+            { modules : List Docs.Module
+            , diff : Maybe ApiDiff
+            , versions : List String
+            , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+            }
+loadDocsInDir options =
     readElmJson
         |> BackendTask.andThen
             (\elmJson ->
@@ -111,30 +147,41 @@ loadDocsWithOptionalDiff options =
 
                                         Err _ ->
                                             []
+
+                                loadDiffFn =
+                                    buildLoadDiff elmJson headDocsJson
                             in
-                            case options.diff of
-                                Nothing ->
-                                    -- Browse-only mode: no diff
-                                    BackendTask.succeed
-                                        { modules = modulesResult
-                                        , diff = Nothing
-                                        }
+                            loadVersions
+                                |> BackendTask.andThen
+                                    (\versions ->
+                                        case options.diff of
+                                            Nothing ->
+                                                -- Browse-only mode: no diff
+                                                BackendTask.succeed
+                                                    { modules = modulesResult
+                                                    , diff = Nothing
+                                                    , versions = versions
+                                                    , loadDiff = loadDiffFn
+                                                    }
 
-                                Just _ ->
-                                    -- Diff mode: compute diff
-                                    (case parseDiffMode options.diff of
-                                        DiffPublished ->
-                                            fetchPublishedDiff elmJson headDocsJson
+                                            Just _ ->
+                                                -- Diff mode: compute diff
+                                                (case parseDiffMode options.diff of
+                                                    DiffPublished ->
+                                                        fetchPublishedDiff elmJson headDocsJson
 
-                                        DiffRefs base ->
-                                            buildRefDiff base elmJson headDocsJson
+                                                    DiffRefs base ->
+                                                        buildRefDiff base elmJson headDocsJson
+                                                )
+                                                    |> BackendTask.map
+                                                        (\maybeDiff ->
+                                                            { modules = modulesResult
+                                                            , diff = maybeDiff
+                                                            , versions = versions
+                                                            , loadDiff = loadDiffFn
+                                                            }
+                                                        )
                                     )
-                                        |> BackendTask.map
-                                            (\maybeDiff ->
-                                                { modules = modulesResult
-                                                , diff = maybeDiff
-                                                }
-                                            )
                         )
             )
 
@@ -176,6 +223,29 @@ elmJsonDecoder =
 
 buildCurrentDocs : ElmJson -> BackendTask FatalError String
 buildCurrentDocs elmJson =
+    resolveRefToSha "HEAD"
+        |> BackendTask.andThen
+            (\headSha ->
+                readCachedDocs headSha
+                    |> BackendTask.andThen
+                        (\maybeCached ->
+                            case maybeCached of
+                                Just cachedDocs ->
+                                    BackendTask.succeed cachedDocs
+
+                                Nothing ->
+                                    buildCurrentDocsUncached elmJson
+                                        |> BackendTask.andThen
+                                            (\docs ->
+                                                writeCachedDocs headSha docs
+                                                    |> BackendTask.map (\() -> docs)
+                                            )
+                        )
+            )
+
+
+buildCurrentDocsUncached : ElmJson -> BackendTask FatalError String
+buildCurrentDocsUncached elmJson =
     if elmJson.projectType == "package" then
         Script.exec "elm" [ "make", "--docs=docs.json" ]
             |> BackendTask.quiet
@@ -206,18 +276,18 @@ fetchPublishedDiff : ElmJson -> String -> BackendTask FatalError (Maybe ApiDiff)
 fetchPublishedDiff elmJson headDocsJson =
     case ( elmJson.packageName, elmJson.packageVersion ) of
         ( Just name, Just version ) ->
-            let
-                url =
-                    "https://package.elm-lang.org/packages/"
-                        ++ name
-                        ++ "/"
-                        ++ version
-                        ++ "/docs.json"
-            in
-            BackendTask.Http.get url BackendTask.Http.expectString
-                |> BackendTask.allowFatal
+            readDocsFromElmHome name version
                 |> BackendTask.andThen
-                    (\baseDocsJson -> computeDiff baseDocsJson headDocsJson)
+                    (\maybeCachedDocs ->
+                        case maybeCachedDocs of
+                            Just baseDocsJson ->
+                                computeDiff baseDocsJson headDocsJson
+
+                            Nothing ->
+                                fetchAndCacheDocs name version
+                                    |> BackendTask.andThen
+                                        (\baseDocsJson -> computeDiff baseDocsJson headDocsJson)
+                    )
 
         _ ->
             BackendTask.fail
@@ -226,29 +296,164 @@ fetchPublishedDiff elmJson headDocsJson =
                 )
 
 
+readDocsFromElmHome : String -> String -> BackendTask FatalError (Maybe String)
+readDocsFromElmHome packageName version =
+    resolveElmHome
+        |> BackendTask.andThen
+            (\elmHome ->
+                let
+                    docsPath =
+                        elmHome ++ "/0.19.1/packages/" ++ packageName ++ "/" ++ version ++ "/docs.json"
+                in
+                BackendTask.File.rawFile docsPath
+                    |> BackendTask.map Just
+                    |> BackendTask.onError (\_ -> BackendTask.succeed Nothing)
+            )
+
+
+resolveElmHome : BackendTask FatalError String
+resolveElmHome =
+    BackendTask.Env.get "ELM_HOME"
+        |> BackendTask.andThen
+            (\maybeElmHome ->
+                case maybeElmHome of
+                    Just elmHome ->
+                        BackendTask.succeed elmHome
+
+                    Nothing ->
+                        Script.command "echo" [ "$HOME" ]
+                            |> BackendTask.map (\home -> String.trim home ++ "/.elm")
+            )
+
+
+fetchAndCacheDocs : String -> String -> BackendTask FatalError String
+fetchAndCacheDocs packageName version =
+    let
+        url =
+            "https://package.elm-lang.org/packages/"
+                ++ packageName
+                ++ "/"
+                ++ version
+                ++ "/docs.json"
+    in
+    BackendTask.Http.get url BackendTask.Http.expectString
+        |> BackendTask.allowFatal
+        |> BackendTask.andThen
+            (\docsJson ->
+                writeDocsToElmHome packageName version docsJson
+                    |> BackendTask.map (\() -> docsJson)
+            )
+
+
+writeDocsToElmHome : String -> String -> String -> BackendTask FatalError ()
+writeDocsToElmHome packageName version docsJson =
+    resolveElmHome
+        |> BackendTask.andThen
+            (\elmHome ->
+                let
+                    dirPath =
+                        elmHome ++ "/0.19.1/packages/" ++ packageName ++ "/" ++ version
+
+                    docsPath =
+                        dirPath ++ "/docs.json"
+                in
+                -- Only write if the directory already exists (package is known to Elm)
+                BackendTask.File.exists dirPath
+                    |> BackendTask.andThen
+                        (\dirExists ->
+                            if dirExists then
+                                BackendTask.Custom.run "writeFileAt"
+                                    (Encode.object
+                                        [ ( "path", Encode.string docsPath )
+                                        , ( "content", Encode.string docsJson )
+                                        ]
+                                    )
+                                    (Decode.null ())
+                                    |> BackendTask.allowFatal
+
+                            else
+                                BackendTask.succeed ()
+                        )
+            )
+
+
 buildRefDiff : String -> ElmJson -> String -> BackendTask FatalError (Maybe ApiDiff)
 buildRefDiff ref elmJson headDocsJson =
+    resolveRefToSha ref
+        |> BackendTask.andThen
+            (\sha ->
+                readCachedDocs sha
+                    |> BackendTask.andThen
+                        (\maybeCachedDocs ->
+                            case maybeCachedDocs of
+                                Just cachedDocs ->
+                                    -- Cache hit: skip worktree entirely
+                                    readOptionalFile "README.md"
+                                        |> BackendTask.andThen
+                                            (\headReadme ->
+                                                computeDiffWithReadme cachedDocs headDocsJson Nothing headReadme
+                                            )
+
+                                Nothing ->
+                                    -- Cache miss: build via worktree, then cache
+                                    buildRefDiffUncached ref sha elmJson headDocsJson
+                        )
+            )
+
+
+buildRefDiffUncached : String -> String -> ElmJson -> String -> BackendTask FatalError (Maybe ApiDiff)
+buildRefDiffUncached ref sha elmJson headDocsJson =
     createWorktree ref
         |> BackendTask.andThen
             (\tempDir ->
                 buildDocsInWorktree tempDir elmJson
                     |> BackendTask.andThen
                         (\baseDocs ->
-                            readOptionalFile (tempDir ++ "/README.md")
+                            writeCachedDocs sha baseDocs
                                 |> BackendTask.andThen
-                                    (\baseReadme ->
-                                        readOptionalFile "README.md"
+                                    (\() ->
+                                        readOptionalFile (tempDir ++ "/README.md")
                                             |> BackendTask.andThen
-                                                (\headReadme ->
-                                                    cleanupWorktree tempDir
+                                                (\baseReadme ->
+                                                    readOptionalFile "README.md"
                                                         |> BackendTask.andThen
-                                                            (\() ->
-                                                                computeDiffWithReadme baseDocs headDocsJson baseReadme headReadme
+                                                            (\headReadme ->
+                                                                cleanupWorktree tempDir
+                                                                    |> BackendTask.andThen
+                                                                        (\() ->
+                                                                            computeDiffWithReadme baseDocs headDocsJson baseReadme headReadme
+                                                                        )
                                                             )
                                                 )
                                     )
                         )
             )
+
+
+resolveRefToSha : String -> BackendTask FatalError String
+resolveRefToSha ref =
+    Script.command "git" [ "rev-parse", ref ]
+        |> BackendTask.map String.trim
+
+
+readCachedDocs : String -> BackendTask FatalError (Maybe String)
+readCachedDocs sha =
+    BackendTask.Custom.run "readCachedDocs"
+        (Encode.string sha)
+        (Decode.nullable Decode.string)
+        |> BackendTask.allowFatal
+
+
+writeCachedDocs : String -> String -> BackendTask FatalError ()
+writeCachedDocs sha docs =
+    BackendTask.Custom.run "writeCachedDocs"
+        (Encode.object
+            [ ( "sha", Encode.string sha )
+            , ( "docs", Encode.string docs )
+            ]
+        )
+        (Decode.null ())
+        |> BackendTask.allowFatal
 
 
 createWorktree : String -> BackendTask FatalError String
@@ -359,3 +564,77 @@ computeDiffWithReadme baseDocsJson headDocsJson baseReadme headReadme =
         Diff.decoder
         |> BackendTask.quiet
         |> BackendTask.allowFatal
+
+
+loadVersions : BackendTask FatalError (List String)
+loadVersions =
+    Script.command "git" [ "tag", "-l" ]
+        |> BackendTask.map parseVersionTags
+
+
+parseVersionTags : String -> List String
+parseVersionTags output =
+    let
+        versionRegex =
+            Regex.fromString "^\\d+\\.\\d+\\.\\d+$"
+                |> Maybe.withDefault Regex.never
+    in
+    output
+        |> String.lines
+        |> List.filter (\line -> Regex.contains versionRegex (String.trim line))
+        |> List.map String.trim
+        |> List.filter (not << String.isEmpty)
+        |> List.sortWith reverseVersionCompare
+
+
+reverseVersionCompare : String -> String -> Order
+reverseVersionCompare a b =
+    let
+        toInts s =
+            s
+                |> String.split "."
+                |> List.filterMap String.toInt
+    in
+    compareLists (toInts b) (toInts a)
+
+
+compareLists : List Int -> List Int -> Order
+compareLists a b =
+    case ( a, b ) of
+        ( [], [] ) ->
+            EQ
+
+        ( [], _ ) ->
+            LT
+
+        ( _, [] ) ->
+            GT
+
+        ( x :: xs, y :: ys ) ->
+            case compare x y of
+                EQ ->
+                    compareLists xs ys
+
+                other ->
+                    other
+
+
+buildLoadDiff : ElmJson -> String -> (String -> BackendTask FatalError (Maybe ApiDiff))
+buildLoadDiff elmJson headDocsJson =
+    \version ->
+        case elmJson.packageName of
+            Just packageName ->
+                -- Try ELM_HOME first for published versions
+                readDocsFromElmHome packageName version
+                    |> BackendTask.andThen
+                        (\maybeCachedDocs ->
+                            case maybeCachedDocs of
+                                Just baseDocsJson ->
+                                    computeDiff baseDocsJson headDocsJson
+
+                                Nothing ->
+                                    buildRefDiff version elmJson headDocsJson
+                        )
+
+            Nothing ->
+                buildRefDiff version elmJson headDocsJson
