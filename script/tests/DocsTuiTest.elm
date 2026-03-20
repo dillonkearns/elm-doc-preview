@@ -126,6 +126,17 @@ suite =
                         |> TuiTest.pressKey '1'
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.expectRunning
+            , test "Shift+Tab cycles pane focus backward" <|
+                \() ->
+                    startBrowse sampleModules
+                        -- Tab forward to items
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        -- Shift+Tab back to modules
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [ Tui.Shift ] }
+                        -- j should navigate modules (not items)
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.ensureViewHas "2 of 2"
+                        |> TuiTest.expectRunning
             , test "Tab cycles pane focus" <|
                 \() ->
                     startBrowse sampleModules

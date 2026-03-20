@@ -353,6 +353,7 @@ type Action
     | ScrollDocsPageUp
     | ToggleMaximize
     | CyclePaneFocus
+    | CyclePaneFocusReverse
     | ScrollToSelectedItem
 
 
@@ -765,6 +766,26 @@ handleAction action model =
             , Effect.none
             )
 
+        CyclePaneFocusReverse ->
+            let
+                prevPane =
+                    case Layout.focusedPane model.layout of
+                        Just "modules" ->
+                            "docs"
+
+                        Just "items" ->
+                            "modules"
+
+                        Just "docs" ->
+                            "items"
+
+                        _ ->
+                            "modules"
+            in
+            ( { model | layout = Layout.focusPane prevPane model.layout }
+            , Effect.none
+            )
+
 
 
 -- KEYBINDINGS
@@ -801,7 +822,9 @@ globalBindings model =
                 []
 
         cycleBinding =
-            [ Keybinding.binding Tui.Tab "Cycle panes" CyclePaneFocus ]
+            [ Keybinding.binding Tui.Tab "Cycle panes" CyclePaneFocus
+            , Keybinding.withModifiers [ Tui.Shift ] Tui.Tab "Prev pane" CyclePaneFocusReverse
+            ]
     in
     Keybinding.group "Global"
         ([ Keybinding.binding (Tui.Character 'q') "Quit" Quit
