@@ -7,6 +7,7 @@ import DocsTui
 import Pages.Script as Script
 import Docs.Diff as Diff exposing (ApiDiff)
 import Elm.Docs as Docs
+import Json.Decode as Decode
 import Elm.Type as Type
 import Expect
 import FatalError exposing (FatalError)
@@ -373,6 +374,8 @@ suite =
                             , diff = Nothing
                             , versions = []
                             , loadDiff = noopLoadDiff
+                            , dependencies = []
+                            , loadPackageDocs = \_ -> BackendTask.succeed []
                             }
                         , init = DocsTui.init
                         , update = DocsTui.update
@@ -402,6 +405,8 @@ suite =
                             , diff = Nothing
                             , versions = []
                             , loadDiff = noopLoadDiff
+                            , dependencies = []
+                            , loadPackageDocs = \_ -> BackendTask.succeed []
                             }
                         , init = DocsTui.init
                         , update = DocsTui.update
@@ -628,6 +633,29 @@ suite =
                         |> TuiTest.ensureViewDoesNotHave "README"
                         |> TuiTest.expectRunning
             ]
+        , describe "package picker"
+            [ test "p opens package picker with dependencies" <|
+                \() ->
+                    startWithDeps [ "elm/json", "elm/http" ] sampleModules
+                        |> TuiTest.pressKey 'p'
+                        |> TuiTest.ensureViewHas "Browse Package"
+                        |> TuiTest.ensureViewHas "elm/json"
+                        |> TuiTest.ensureViewHas "elm/http"
+                        |> TuiTest.expectRunning
+            , test "Escape closes package picker" <|
+                \() ->
+                    startWithDeps [ "elm/json" ] sampleModules
+                        |> TuiTest.pressKey 'p'
+                        |> TuiTest.pressKeyWith { key = Tui.Escape, modifiers = [] }
+                        |> TuiTest.ensureViewDoesNotHave "Browse Package"
+                        |> TuiTest.expectRunning
+            , test "p without dependencies does nothing" <|
+                \() ->
+                    startBrowse sampleModules
+                        |> TuiTest.pressKey 'p'
+                        |> TuiTest.ensureViewDoesNotHave "Browse Package"
+                        |> TuiTest.expectRunning
+            ]
         ]
 
 
@@ -648,6 +676,8 @@ startBrowse modules =
             , diff = Nothing
             , versions = []
             , loadDiff = noopLoadDiff
+            , dependencies = []
+            , loadPackageDocs = \_ -> BackendTask.succeed []
             }
         , init = DocsTui.init
         , update = DocsTui.update
@@ -664,6 +694,8 @@ startWithDiff diff modules =
             , diff = Just diff
             , versions = []
             , loadDiff = noopLoadDiff
+            , dependencies = []
+            , loadPackageDocs = \_ -> BackendTask.succeed []
             }
         , init = DocsTui.init
         , update = DocsTui.update
@@ -688,12 +720,40 @@ startWithVersions versions modules =
             , diff = Nothing
             , versions = versions
             , loadDiff = testLoadDiff
+            , dependencies = []
+            , loadPackageDocs = \_ -> BackendTask.succeed []
             }
         , init = DocsTui.init
         , update = DocsTui.update
         , view = DocsTui.view
         , subscriptions = DocsTui.subscriptions
         }
+
+
+startWithDeps : List String -> List Docs.Module -> TuiTest.TuiTest DocsTui.Model DocsTui.Msg
+startWithDeps deps modules =
+    TuiTest.startWithContext { width = 120, height = 40, colorProfile = Tui.TrueColor }
+        { data =
+            { modules = modules
+            , diff = Nothing
+            , versions = []
+            , loadDiff = noopLoadDiff
+            , dependencies = deps
+            , loadPackageDocs = testLoadPackageDocs
+            }
+        , init = DocsTui.init
+        , update = DocsTui.update
+        , view = DocsTui.view
+        , subscriptions = DocsTui.subscriptions
+        }
+
+
+testLoadPackageDocs : String -> BackendTask.BackendTask FatalError (List Docs.Module)
+testLoadPackageDocs packageName =
+    BackendTask.Custom.run "loadPackageDocs"
+        (Encode.string packageName)
+        (Decode.list Docs.decoder)
+        |> BackendTask.allowFatal
 
 
 encodeApiDiff : ApiDiff -> Encode.Value

@@ -107,6 +107,8 @@ loadDocsWithOptionalDiff :
             , diff : Maybe ApiDiff
             , versions : List String
             , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+            , dependencies : List String
+            , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
             }
 loadDocsWithOptionalDiff options =
     Script.command "pwd" []
@@ -131,6 +133,8 @@ loadDocsInDir :
             , diff : Maybe ApiDiff
             , versions : List String
             , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+            , dependencies : List String
+            , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
             }
 loadDocsInDir options =
     readElmJson
@@ -162,6 +166,8 @@ loadDocsInDir options =
                                                     , diff = Nothing
                                                     , versions = versions
                                                     , loadDiff = loadDiffFn
+                                                    , dependencies = List.map Tuple.first elmJson.directDeps
+                                                    , loadPackageDocs = buildLoadPackageDocs
                                                     }
 
                                             Just _ ->
@@ -179,6 +185,8 @@ loadDocsInDir options =
                                                             , diff = maybeDiff
                                                             , versions = versions
                                                             , loadDiff = loadDiffFn
+                                                            , dependencies = List.map Tuple.first elmJson.directDeps
+                                                            , loadPackageDocs = buildLoadPackageDocs
                                                             }
                                                         )
                                     )
@@ -653,3 +661,73 @@ buildLoadDiff elmJson headDocsJson =
 
             Nothing ->
                 buildRefDiff version elmJson headDocsJson
+
+
+buildLoadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+buildLoadPackageDocs packageName =
+    -- Try ELM_HOME first, then fetch from registry
+    resolveElmHome
+        |> BackendTask.andThen
+            (\elmHome ->
+                let
+                    -- Find the latest installed version
+                    packageDir =
+                        elmHome ++ "/0.19.1/packages/" ++ packageName
+                in
+                Script.command "ls" [ packageDir ]
+                    |> BackendTask.map
+                        (\output ->
+                            output
+                                |> String.trim
+                                |> String.lines
+                                |> List.filter (not << String.isEmpty)
+                                |> List.reverse
+                                |> List.head
+                                |> Maybe.withDefault ""
+                        )
+                    |> BackendTask.andThen
+                        (\latestVersion ->
+                            if String.isEmpty latestVersion then
+                                -- Package not installed, try fetching latest from registry
+                                fetchPackageDocsFromRegistry packageName
+
+                            else
+                                let
+                                    docsPath =
+                                        packageDir ++ "/" ++ latestVersion ++ "/docs.json"
+                                in
+                                BackendTask.File.rawFile docsPath
+                                    |> BackendTask.map
+                                        (\json ->
+                                            case Decode.decodeString (Decode.list Docs.decoder) json of
+                                                Ok modules ->
+                                                    modules
+
+                                                Err _ ->
+                                                    []
+                                        )
+                                    |> BackendTask.onError
+                                        (\_ -> fetchPackageDocsFromRegistry packageName)
+                        )
+            )
+
+
+fetchPackageDocsFromRegistry : String -> BackendTask FatalError (List Docs.Module)
+fetchPackageDocsFromRegistry packageName =
+    let
+        url =
+            "https://package.elm-lang.org/packages/"
+                ++ packageName
+                ++ "/latest/docs.json"
+    in
+    BackendTask.Http.get url BackendTask.Http.expectString
+        |> BackendTask.allowFatal
+        |> BackendTask.andThen
+            (\json ->
+                case Decode.decodeString (Decode.list Docs.decoder) json of
+                    Ok modules ->
+                        BackendTask.succeed modules
+
+                    Err _ ->
+                        BackendTask.succeed []
+            )

@@ -34,6 +34,7 @@ import Tui.Keybinding as Keybinding
 import Tui.Layout as Layout
 import Tui.Modal as Modal
 import Tui.FuzzyMatch as FuzzyMatch
+import Tui.Picker
 import Tui.Spinner
 import Tui.Sub
 import Tui.Toast as Toast
@@ -57,6 +58,11 @@ type alias Model =
     , cachedDocsContent : Maybe { key : String, content : List Tui.Screen }
     , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
     , itemLinePositions : List ( String, Int )
+    , dependencies : List String
+    , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+    , packagePicker : Maybe (Tui.Picker.State String)
+    , browsingPackage : Maybe String
+    , homeModules : List Docs.Module
     }
 
 
@@ -80,6 +86,7 @@ type Msg
     | GotDiff (Maybe ApiDiff)
     | SpinnerTick
     | ToastTick
+    | GotPackageDocs String (List Docs.Module)
 
 
 init :
@@ -87,9 +94,11 @@ init :
     , diff : Maybe ApiDiff
     , versions : List String
     , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+    , dependencies : List String
+    , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
     }
     -> ( Model, Effect.Effect Msg )
-init { modules, diff, versions, loadDiff } =
+init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs } =
     ( { layout =
             Layout.init
                 |> Layout.focusPane "modules"
@@ -109,6 +118,11 @@ init { modules, diff, versions, loadDiff } =
       , cachedDocsContent = Nothing
       , cachedRightPane = Nothing
       , itemLinePositions = []
+      , dependencies = dependencies
+      , loadPackageDocs = loadPackageDocs
+      , packagePicker = Nothing
+      , browsingPackage = Nothing
+      , homeModules = modules
       }
     , Effect.none
     )
@@ -212,24 +226,67 @@ update : Msg -> Model -> ( Model, Effect.Effect Msg )
 update msg model =
     case msg of
         KeyPressed event ->
-            case model.filterInput of
-                Just input ->
-                    -- In filter mode: Escape cancels, everything else goes to input
-                    if event.key == Tui.Escape then
-                        ( { model | filterInput = Nothing }, Effect.none )
+            case model.packagePicker of
+                Just picker ->
+                    -- Package picker is open: handle its events
+                    case event.key of
+                        Tui.Escape ->
+                            ( { model | packagePicker = Nothing }, Effect.none )
 
-                    else
-                        ( { model | filterInput = Just (Input.update event input) }
-                        , Effect.none
-                        )
+                        Tui.Enter ->
+                            case Tui.Picker.selected picker of
+                                Just packageName ->
+                                    ( { model
+                                        | packagePicker = Nothing
+                                        , loadingDiff = True
+                                        , toasts = Toast.toast ("Loading " ++ packageName ++ "...") model.toasts
+                                      }
+                                    , Effect.perform (GotPackageDocs packageName) (model.loadPackageDocs packageName)
+                                    )
+
+                                Nothing ->
+                                    ( { model | packagePicker = Nothing }, Effect.none )
+
+                        Tui.Arrow Tui.Down ->
+                            ( { model | packagePicker = Just (Tui.Picker.navigateDown picker) }, Effect.none )
+
+                        Tui.Arrow Tui.Up ->
+                            ( { model | packagePicker = Just (Tui.Picker.navigateUp picker) }, Effect.none )
+
+                        Tui.Character 'j' ->
+                            ( { model | packagePicker = Just (Tui.Picker.navigateDown picker) }, Effect.none )
+
+                        Tui.Character 'k' ->
+                            ( { model | packagePicker = Just (Tui.Picker.navigateUp picker) }, Effect.none )
+
+                        Tui.Backspace ->
+                            ( { model | packagePicker = Just (Tui.Picker.backspace picker) }, Effect.none )
+
+                        Tui.Character c ->
+                            ( { model | packagePicker = Just (Tui.Picker.typeChar c picker) }, Effect.none )
+
+                        _ ->
+                            ( model, Effect.none )
 
                 Nothing ->
-                    case Keybinding.dispatch (allBindings model) event of
-                        Just action ->
-                            handleAction action model
+                    case model.filterInput of
+                        Just input ->
+                            -- In filter mode: Escape cancels, everything else goes to input
+                            if event.key == Tui.Escape then
+                                ( { model | filterInput = Nothing }, Effect.none )
+
+                            else
+                                ( { model | filterInput = Just (Input.update event input) }
+                                , Effect.none
+                                )
 
                         Nothing ->
-                            ( model, Effect.none )
+                            case Keybinding.dispatch (allBindings model) event of
+                                Just action ->
+                                    handleAction action model
+
+                                Nothing ->
+                                    ( model, Effect.none )
 
         MouseEvent mouseEvent ->
             let
@@ -324,6 +381,23 @@ update msg model =
         ToastTick ->
             ( { model | toasts = Toast.tick model.toasts }, Effect.none )
 
+        GotPackageDocs packageName newModules ->
+            ( { model
+                | modules = newModules
+                , moduleTree = ModuleTree.build (List.map .name newModules)
+                , browsingPackage = Just packageName
+                , loadingDiff = False
+                , rightView = DocsView
+                , diff = Nothing
+                , activeLeftTab = ModulesTab
+                , cachedDocsContent = Nothing
+                , cachedRightPane = Nothing
+                , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
+              }
+                |> refreshRightPaneCache
+            , Effect.none
+            )
+
 
 type Action
     = Quit
@@ -355,6 +429,7 @@ type Action
     | CyclePaneFocus
     | CyclePaneFocusReverse
     | ScrollToSelectedItem
+    | OpenPackagePicker
 
 
 handleAction : Action -> Model -> ( Model, Effect.Effect Msg )
@@ -766,6 +841,24 @@ handleAction action model =
             , Effect.none
             )
 
+        OpenPackagePicker ->
+            if List.isEmpty model.dependencies then
+                ( model, Effect.none )
+
+            else
+                ( { model
+                    | packagePicker =
+                        Just
+                            (Tui.Picker.open
+                                { items = model.dependencies
+                                , toString = identity
+                                , title = "Browse Package"
+                                }
+                            )
+                  }
+                , Effect.none
+                )
+
         CyclePaneFocusReverse ->
             let
                 prevPane =
@@ -840,6 +933,12 @@ globalBindings model =
             ++ changesTabBinding
             ++ versionsTabBinding
             ++ cycleBinding
+            ++ (if not (List.isEmpty model.dependencies) then
+                    [ Keybinding.binding (Tui.Character 'p') "Browse package" OpenPackagePicker ]
+
+                else
+                    []
+               )
         )
 
 
@@ -951,29 +1050,46 @@ view ctx model =
         layoutRows =
             Layout.toRows layoutState (viewLayout contentCtx model)
     in
-    if model.showHelp then
-        let
-            helpBody =
-                Keybinding.helpRows "" [ modulesBindings model, docsBindings, globalBindings model ]
-        in
-        Modal.overlay
-            { title = "Keybindings"
-            , body = helpBody
-            , footer = "? close  q quit"
-            , width = min 50 (ctx.width - 4)
-            }
-            { termWidth = ctx.width, termHeight = ctx.height - 1 }
-            layoutRows
-            ++ [ statusBar ]
-            |> Tui.lines
+    case model.packagePicker of
+        Just picker ->
+            let
+                baseRows =
+                    layoutRows ++ [ statusBar ]
+            in
+            Modal.overlay
+                { title = Tui.Picker.title picker
+                , body = Tui.Picker.viewBody picker
+                , footer = String.fromInt (Tui.Picker.matchCount picker) ++ " packages  type to filter  Enter select  Esc cancel"
+                , width = min 60 (ctx.width - 4)
+                }
+                { termWidth = ctx.width, termHeight = ctx.height - 1 }
+                baseRows
+                |> Tui.lines
 
-    else if Toast.hasToasts model.toasts then
-        (layoutRows ++ [ Tui.concat [ statusBar, Tui.text " ", toastView ] ])
-            |> Tui.lines
+        Nothing ->
+            if model.showHelp then
+                let
+                    helpBody =
+                        Keybinding.helpRows "" [ modulesBindings model, docsBindings, globalBindings model ]
+                in
+                Modal.overlay
+                    { title = "Keybindings"
+                    , body = helpBody
+                    , footer = "? close  q quit"
+                    , width = min 50 (ctx.width - 4)
+                    }
+                    { termWidth = ctx.width, termHeight = ctx.height - 1 }
+                    layoutRows
+                    ++ [ statusBar ]
+                    |> Tui.lines
 
-    else
-        (layoutRows ++ [ statusBar ])
-            |> Tui.lines
+            else if Toast.hasToasts model.toasts then
+                (layoutRows ++ [ Tui.concat [ statusBar, Tui.text " ", toastView ] ])
+                    |> Tui.lines
+
+            else
+                (layoutRows ++ [ statusBar ])
+                    |> Tui.lines
 
 
 viewLayout : { a | width : Int, height : Int } -> Model -> Layout.Layout Msg
