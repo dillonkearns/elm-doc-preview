@@ -77,11 +77,13 @@ suite =
                         |> TuiTest.expectRunning
             ]
         , describe "diff mode (with diff data)"
-            [ test "d toggles to diff view when diff data present" <|
+            [ test "d toggles to diff view with change summary" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
                         |> TuiTest.pressKey 'd'
                         |> TuiTest.ensureViewHas "MINOR CHANGE"
+                        |> TuiTest.ensureViewHas "added"
+                        |> TuiTest.ensureViewHas "across"
                         |> TuiTest.expectRunning
             , test "d toggles back to docs view" <|
                 \() ->
@@ -124,11 +126,17 @@ suite =
                         |> TuiTest.pressKey '1'
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.expectRunning
-            , test "Tab cycles through tabs when diff present" <|
+            , test "Tab cycles pane focus" <|
                 \() ->
-                    startWithDiff sampleDiff sampleModules
+                    startBrowse sampleModules
                         |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
-                        |> TuiTest.ensureViewHas "Changes"
+                        -- Focus moves from modules to items
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        -- Focus moves from items to docs
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        -- Focus moves from docs back to modules
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.ensureViewHas "2 of 2"
                         |> TuiTest.expectRunning
             , test "pressing 2 without diff or versions does nothing" <|
                 \() ->
@@ -345,6 +353,56 @@ suite =
                         |> TuiTest.ensureViewHas " + Http"
                         |> TuiTest.ensureViewDoesNotHave "decodeString"
                         |> TuiTest.expectRunning
+            , test "scrolling docs updates items pane selection" <|
+                \() ->
+                    -- Use small terminal so content requires scrolling
+                    TuiTest.startWithContext { width = 120, height = 8, colorProfile = Tui.TrueColor }
+                        { data =
+                            { modules = [ multiValueModule ]
+                            , diff = Nothing
+                            , versions = []
+                            , loadDiff = noopLoadDiff
+                            }
+                        , init = DocsTui.init
+                        , update = DocsTui.update
+                        , view = DocsTui.view
+                        , subscriptions = DocsTui.subscriptions
+                        }
+                        -- Focus docs pane
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        -- Scroll down past foo to bar
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        -- Items pane should now show "2 of 2" (bar selected)
+                        |> TuiTest.ensureViewHas "2 of 2"
+                        |> TuiTest.expectRunning
+            , test "j in items pane scrolls docs to selected item" <|
+                \() ->
+                    TuiTest.startWithContext { width = 120, height = 8, colorProfile = Tui.TrueColor }
+                        { data =
+                            { modules = [ multiValueModule ]
+                            , diff = Nothing
+                            , versions = []
+                            , loadDiff = noopLoadDiff
+                            }
+                        , init = DocsTui.init
+                        , update = DocsTui.update
+                        , view = DocsTui.view
+                        , subscriptions = DocsTui.subscriptions
+                        }
+                        -- Focus items pane and navigate to bar
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        |> TuiTest.pressKey 'j'
+                        -- Docs should scroll to show bar near the top
+                        |> TuiTest.ensureViewHas "┃ bar"
+                        |> TuiTest.expectRunning
             , test "items pane shows no items for group headers" <|
                 \() ->
                     startBrowse treeModules
@@ -414,19 +472,16 @@ suite =
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.ensureViewDoesNotHave "Versions"
                         |> TuiTest.expectRunning
-            , test "Tab cycles through all available tabs" <|
+            , test "Tab cycles pane focus with versions" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
                         |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
-                        -- First tab cycles to Changes, which triggers diff loading
-                        |> TuiTest.ensureViewHas "Loading"
-                        |> TuiTest.resolveEffect
-                            (BackendTaskTest.simulateCustom "loadDiff"
-                                (encodeApiDiff sampleDiff)
-                            )
+                        -- Focus moves to items pane
                         |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
-                        -- Second tab cycles to Versions
-                        |> TuiTest.ensureViewHas "12.1.0"
+                        -- Focus moves to docs pane
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        -- Focus moves back to modules
+                        |> TuiTest.ensureViewHas "1 of 2"
                         |> TuiTest.expectRunning
             , test "j/k navigates version list" <|
                 \() ->
@@ -470,6 +525,17 @@ suite =
                                 (encodeApiDiff sampleDiff)
                             )
                         |> TuiTest.ensureViewHas "vs 12.1.0"
+                        |> TuiTest.expectRunning
+            , test "shows toast when diff finishes loading" <|
+                \() ->
+                    startWithVersions [ "12.1.0" ] sampleModules
+                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKeyWith { key = Tui.Enter, modifiers = [] }
+                        |> TuiTest.resolveEffect
+                            (BackendTaskTest.simulateCustom "loadDiff"
+                                (encodeApiDiff sampleDiff)
+                            )
+                        |> TuiTest.ensureViewHas "Diff loaded"
                         |> TuiTest.expectRunning
             ]
         , describe "d shortcut with versions"

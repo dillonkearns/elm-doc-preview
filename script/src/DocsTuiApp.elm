@@ -226,20 +226,29 @@ buildCurrentDocs elmJson =
     resolveRefToSha "HEAD"
         |> BackendTask.andThen
             (\headSha ->
-                readCachedDocs headSha
+                hasUncommittedChanges
                     |> BackendTask.andThen
-                        (\maybeCached ->
-                            case maybeCached of
-                                Just cachedDocs ->
-                                    BackendTask.succeed cachedDocs
+                        (\isDirty ->
+                            if isDirty then
+                                -- Working tree is dirty, don't use cache
+                                buildCurrentDocsUncached elmJson
 
-                                Nothing ->
-                                    buildCurrentDocsUncached elmJson
-                                        |> BackendTask.andThen
-                                            (\docs ->
-                                                writeCachedDocs headSha docs
-                                                    |> BackendTask.map (\() -> docs)
-                                            )
+                            else
+                                readCachedDocs headSha
+                                    |> BackendTask.andThen
+                                        (\maybeCached ->
+                                            case maybeCached of
+                                                Just cachedDocs ->
+                                                    BackendTask.succeed cachedDocs
+
+                                                Nothing ->
+                                                    buildCurrentDocsUncached elmJson
+                                                        |> BackendTask.andThen
+                                                            (\docs ->
+                                                                writeCachedDocs headSha docs
+                                                                    |> BackendTask.map (\() -> docs)
+                                                            )
+                                        )
                         )
             )
 
@@ -434,6 +443,12 @@ resolveRefToSha : String -> BackendTask FatalError String
 resolveRefToSha ref =
     Script.command "git" [ "rev-parse", ref ]
         |> BackendTask.map String.trim
+
+
+hasUncommittedChanges : BackendTask FatalError Bool
+hasUncommittedChanges =
+    Script.command "git" [ "status", "--porcelain" ]
+        |> BackendTask.map (\output -> String.trim output /= "")
 
 
 readCachedDocs : String -> BackendTask FatalError (Maybe String)

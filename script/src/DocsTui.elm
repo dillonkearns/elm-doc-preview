@@ -36,6 +36,7 @@ import Tui.Modal as Modal
 import Tui.FuzzyMatch as FuzzyMatch
 import Tui.Spinner
 import Tui.Sub
+import Tui.Toast as Toast
 
 
 type alias Model =
@@ -52,6 +53,10 @@ type alias Model =
     , loadingDiff : Bool
     , diffVersion : Maybe String
     , spinnerTick : Int
+    , toasts : Toast.State
+    , cachedDocsContent : Maybe { key : String, content : List Tui.Screen }
+    , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
+    , itemLinePositions : List ( String, Int )
     }
 
 
@@ -74,6 +79,7 @@ type Msg
     | GotContext { width : Int, height : Int }
     | GotDiff (Maybe ApiDiff)
     | SpinnerTick
+    | ToastTick
 
 
 init :
@@ -99,6 +105,10 @@ init { modules, diff, versions, loadDiff } =
       , loadingDiff = False
       , diffVersion = Nothing
       , spinnerTick = 0
+      , toasts = Toast.init
+      , cachedDocsContent = Nothing
+      , cachedRightPane = Nothing
+      , itemLinePositions = []
       }
     , Effect.none
     )
@@ -234,40 +244,37 @@ update msg model =
                     update subMsg { model | layout = newLayout }
 
                 Nothing ->
-                    ( { model | layout = newLayout }, Effect.none )
+                    ( { model | layout = newLayout }
+                        |> syncItemsToScroll
+                    , Effect.none
+                    )
 
         SelectEntry _ ->
             ( { model
                 | layout =
                     model.layout
                         |> Layout.resetScroll "docs"
+                , cachedDocsContent = Nothing
+                , cachedRightPane = Nothing
               }
+                |> refreshRightPaneCache
             , Effect.none
             )
 
         SelectItem idx ->
             let
-                items =
-                    itemsForCurrentView model
-
-                maybeItemName =
-                    items |> List.drop idx |> List.head
-
-                docsContent =
-                    currentDocsContent model
-
+                -- Use precomputed positions — fast lookup
                 scrollTarget =
-                    case maybeItemName of
-                        Just itemName ->
-                            findLineForItem itemName docsContent
-
-                        Nothing ->
-                            0
+                    model.itemLinePositions
+                        |> List.drop idx
+                        |> List.head
+                        |> Maybe.map Tuple.second
+                        |> Maybe.withDefault 0
 
                 newLayout =
                     model.layout
                         |> Layout.resetScroll "docs"
-                        |> Layout.scrollDown "docs" scrollTarget
+                        |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
             in
             ( { model | layout = newLayout }
             , Effect.none
@@ -277,11 +284,22 @@ update msg model =
             ( { model
                 | layout =
                     Layout.withContext ctx model.layout
+                , cachedRightPane = Nothing
               }
+                |> refreshRightPaneCache
             , Effect.none
             )
 
         GotDiff maybeDiff ->
+            let
+                toastMessage =
+                    case model.diffVersion of
+                        Just version ->
+                            "Diff loaded vs " ++ version
+
+                        Nothing ->
+                            "Diff loaded"
+            in
             ( { model
                 | diff = maybeDiff
                 , loadingDiff = False
@@ -292,12 +310,19 @@ update msg model =
 
                         Nothing ->
                             model.rightView
+                , toasts = Toast.toast toastMessage model.toasts
+                , cachedDocsContent = Nothing
+                , cachedRightPane = Nothing
               }
+                |> refreshRightPaneCache
             , Effect.none
             )
 
         SpinnerTick ->
             ( { model | spinnerTick = model.spinnerTick + 1 }, Effect.none )
+
+        ToastTick ->
+            ( { model | toasts = Toast.tick model.toasts }, Effect.none )
 
 
 type Action
@@ -327,6 +352,8 @@ type Action
     | ScrollDocsPageDown
     | ScrollDocsPageUp
     | ToggleMaximize
+    | CyclePaneFocus
+    | ScrollToSelectedItem
 
 
 handleAction : Action -> Model -> ( Model, Effect.Effect Msg )
@@ -431,12 +458,14 @@ handleAction action model =
             )
 
         ScrollDocsDown ->
-            ( { model | layout = Layout.scrollDown "docs" 3 model.layout }
+            ( { model | layout = cappedScrollDown model 3 }
+                |> syncItemsToScroll
             , Effect.none
             )
 
         ScrollDocsUp ->
             ( { model | layout = Layout.scrollUp "docs" 3 model.layout }
+                |> syncItemsToScroll
             , Effect.none
             )
 
@@ -462,7 +491,10 @@ handleAction action model =
                                     DiffView ->
                                         DocsView
                         in
-                        ( { model | rightView = newView }, Effect.none )
+                        ( { model | rightView = newView, cachedRightPane = Nothing }
+                            |> refreshRightPaneCache
+                        , Effect.none
+                        )
 
                     Nothing ->
                         case model.versions of
@@ -485,7 +517,10 @@ handleAction action model =
                     ( model, Effect.none )
 
         SwitchToModulesTab ->
-            ( { model | activeLeftTab = ModulesTab, rightView = DocsView }, Effect.none )
+            ( { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
+                |> refreshRightPaneCache
+            , Effect.none
+            )
 
         SwitchToChangesTab ->
             case model.diff of
@@ -656,7 +691,8 @@ handleAction action model =
                 pageSize =
                     max 1 (ctx.height - 4)
             in
-            ( { model | layout = Layout.scrollDown "docs" pageSize model.layout }
+            ( { model | layout = cappedScrollDown model pageSize }
+                |> syncItemsToScroll
             , Effect.none
             )
 
@@ -669,11 +705,63 @@ handleAction action model =
                     max 1 (ctx.height - 4)
             in
             ( { model | layout = Layout.scrollUp "docs" pageSize model.layout }
+                |> syncItemsToScroll
             , Effect.none
             )
 
         ToggleMaximize ->
             ( { model | layout = Layout.toggleMaximize "docs" model.layout }
+            , Effect.none
+            )
+
+        ScrollToSelectedItem ->
+            let
+                items =
+                    itemsForCurrentView model
+
+                selectedIdx =
+                    Layout.selectedIndex "items" model.layout
+
+                maybeItemName =
+                    items |> List.drop selectedIdx |> List.head
+
+                docsContent =
+                    currentDocsContent model
+
+                scrollTarget =
+                    case maybeItemName of
+                        Just itemName ->
+                            findLineForItem itemName docsContent
+
+                        Nothing ->
+                            0
+
+                newLayout =
+                    model.layout
+                        |> Layout.resetScroll "docs"
+                        |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
+            in
+            ( { model | layout = newLayout }
+            , Effect.none
+            )
+
+        CyclePaneFocus ->
+            let
+                nextPane =
+                    case Layout.focusedPane model.layout of
+                        Just "modules" ->
+                            "items"
+
+                        Just "items" ->
+                            "docs"
+
+                        Just "docs" ->
+                            "modules"
+
+                        _ ->
+                            "modules"
+            in
+            ( { model | layout = Layout.focusPane nextPane model.layout }
             , Effect.none
             )
 
@@ -713,11 +801,7 @@ globalBindings model =
                 []
 
         cycleBinding =
-            if hasDiff || hasVersions then
-                [ Keybinding.binding Tui.Tab "Cycle tabs" CycleLeftTab ]
-
-            else
-                []
+            [ Keybinding.binding Tui.Tab "Cycle panes" CyclePaneFocus ]
     in
     Keybinding.group "Global"
         ([ Keybinding.binding (Tui.Character 'q') "Quit" Quit
@@ -781,6 +865,7 @@ itemsBindings =
             |> Keybinding.withAlternate Tui.PageDown
         , Keybinding.binding (Tui.Character '<') "Page up" PageUp
             |> Keybinding.withAlternate Tui.PageUp
+        , Keybinding.binding Tui.Enter "Jump to item" ScrollToSelectedItem
         ]
 
 
@@ -837,6 +922,9 @@ view ctx model =
         statusBar =
             renderStatusBar model ctx.width
 
+        toastView =
+            Toast.view model.toasts
+
         layoutRows =
             Layout.toRows layoutState (viewLayout contentCtx model)
     in
@@ -854,6 +942,10 @@ view ctx model =
             { termWidth = ctx.width, termHeight = ctx.height - 1 }
             layoutRows
             ++ [ statusBar ]
+            |> Tui.lines
+
+    else if Toast.hasToasts model.toasts then
+        (layoutRows ++ [ Tui.concat [ statusBar, Tui.text " ", toastView ] ])
             |> Tui.lines
 
     else
@@ -925,6 +1017,7 @@ renderStatusBar model width =
             { fg = Just Ansi.Color.black
             , bg = Just Ansi.Color.white
             , attributes = []
+            , hyperlink = Nothing
             }
     in
     Tui.styled barStyle (hintText ++ String.repeat padding " ")
@@ -932,7 +1025,7 @@ renderStatusBar model width =
 
 modulesPaneWidth : Int -> Layout.Width
 modulesPaneWidth termWidth =
-    Layout.px (min 28 (termWidth // 4))
+    Layout.fixed (min 28 (termWidth // 4))
 
 
 leftPaneTitle : Model -> String
@@ -1127,7 +1220,7 @@ itemsPane model =
     in
     Layout.pane "items"
         { title = "Items"
-        , width = Layout.px 20
+        , width = Layout.fixed 20
         }
         (Layout.selectableList
             { onSelect = SelectItem
@@ -1137,6 +1230,7 @@ itemsPane model =
                         { fg = Just Ansi.Color.white
                         , bg = Just Ansi.Color.blue
                         , attributes = [ Tui.Bold ]
+                        , hyperlink = Nothing
                         }
                         (name ++ " ")
             , default = \name -> Tui.text name
@@ -1154,13 +1248,210 @@ itemsPane model =
             )
 
 
+rightPaneCacheKey : Int -> Model -> String
+rightPaneCacheKey wrapWidth model =
+    docsContentCacheKey model ++ ":" ++ String.fromInt wrapWidth
+
+
+syncItemsToScroll : Model -> Model
+syncItemsToScroll model =
+    let
+        scrollOffset =
+            Layout.scrollPosition "docs" model.layout
+
+        -- Select the last item whose line is at or above the top of the visible area
+        -- This means: as you scroll down past an item, it stays selected until the next item
+        -- reaches the top. As you scroll up, an item becomes selected as soon as it appears.
+        anchor =
+            scrollOffset + 3
+
+        -- Use precomputed positions — just integer comparisons, no string scanning
+        bestIndex =
+            model.itemLinePositions
+                |> List.indexedMap Tuple.pair
+                |> List.foldl
+                    (\( idx, ( _, linePos ) ) best ->
+                        if linePos <= anchor then
+                            idx
+
+                        else
+                            best
+                    )
+                    0
+    in
+    { model | layout = Layout.setSelectedIndex "items" bestIndex model.layout }
+
+
+refreshRightPaneCache : Model -> Model
+refreshRightPaneCache model =
+    let
+        ctx =
+            Layout.contextOf model.layout
+
+        wrapWidth =
+            docsPaneWidth ctx - 2
+
+        key =
+            rightPaneCacheKey wrapWidth model
+    in
+    let
+        buildAndCachePositions m =
+            let
+                cache =
+                    buildRightPaneCache wrapWidth m key
+
+                items =
+                    itemsForCurrentView m
+
+                positions =
+                    items
+                        |> List.map
+                            (\itemName ->
+                                ( itemName, findLineForItem itemName cache.lines )
+                            )
+            in
+            { m | cachedRightPane = Just cache, itemLinePositions = positions }
+    in
+    case model.cachedRightPane of
+        Just cached ->
+            if cached.key == key then
+                model
+
+            else
+                buildAndCachePositions model
+
+        Nothing ->
+            buildAndCachePositions model
+
+
+buildRightPaneCache : Int -> Model -> String -> { key : String, title : String, lines : List Tui.Screen }
+buildRightPaneCache wrapWidth model key =
+    case model.rightView of
+        DocsView ->
+            case selectedEntry model of
+                Just (Leaf { name }) ->
+                    case findModule name model.modules of
+                        Just mod ->
+                            { key = key
+                            , title = "Docs: " ++ name
+                            , lines = renderModuleDocs wrapWidth mod
+                            }
+
+                        Nothing ->
+                            { key = key
+                            , title = "Docs: " ++ name
+                            , lines = [ Tui.text ("Module " ++ name ++ " not found") ]
+                            }
+
+                Just (Group { prefix }) ->
+                    { key = key
+                    , title = "Docs: " ++ prefix
+                    , lines = [ Tui.text ("Select a module under " ++ prefix) ]
+                    }
+
+                Nothing ->
+                    { key = key
+                    , title = "Docs"
+                    , lines = [ Tui.text "No module selected" ]
+                    }
+
+        DiffView ->
+            let
+                diffTitle =
+                    case model.diffVersion of
+                        Just version ->
+                            "Diff vs " ++ version
+
+                        Nothing ->
+                            "Diff"
+
+                diffLines =
+                    case model.diff of
+                        Just diff ->
+                            let
+                                magnitudeHeader =
+                                    [ magnitudeLine diff.magnitude
+                                    , changeSummaryLine diff
+                                    , Tui.text ""
+                                    ]
+
+                                entryDiffLines =
+                                    case selectedEntry model of
+                                        Just (Leaf { name }) ->
+                                            if name == "README" then
+                                                renderReadmeDiff diff
+
+                                            else
+                                                renderModuleDiff wrapWidth diff model.modules name
+
+                                        _ ->
+                                            [ Tui.text "No module selected" ]
+                            in
+                            magnitudeHeader ++ entryDiffLines
+
+                        Nothing ->
+                            [ Tui.text "No diff data" ]
+            in
+            { key = key
+            , title = diffTitle
+            , lines = diffLines
+            }
+
+
+docsContentCacheKey : Model -> String
+docsContentCacheKey model =
+    let
+        entryName =
+            case selectedEntry model of
+                Just (Leaf { name }) ->
+                    name
+
+                Just (Group { prefix }) ->
+                    prefix
+
+                Nothing ->
+                    ""
+
+        viewKey =
+            case model.rightView of
+                DocsView ->
+                    "docs"
+
+                DiffView ->
+                    "diff"
+    in
+    viewKey ++ ":" ++ entryName
+
+
 currentDocsContent : Model -> List Tui.Screen
 currentDocsContent model =
+    let
+        key =
+            docsContentCacheKey model
+    in
+    case model.cachedDocsContent of
+        Just cached ->
+            if cached.key == key then
+                cached.content
+
+            else
+                buildDocsContent model
+
+        Nothing ->
+            buildDocsContent model
+
+
+buildDocsContent : Model -> List Tui.Screen
+buildDocsContent model =
+    let
+        width =
+            (Layout.contextOf model.layout).width
+    in
     case model.rightView of
         DocsView ->
             case selectedModule model of
                 Just mod ->
-                    renderModuleDocs mod
+                    renderModuleDocs width mod
 
                 Nothing ->
                     []
@@ -1173,7 +1464,7 @@ currentDocsContent model =
 
                     else
                         [ magnitudeLine diff.magnitude, Tui.text "" ]
-                            ++ renderModuleDiff diff model.modules name
+                            ++ renderModuleDiff width diff model.modules name
 
                 _ ->
                     []
@@ -1203,20 +1494,25 @@ findLineForItem itemName lines =
 
 moduleItemNames : Docs.Module -> List String
 moduleItemNames mod =
-    let
-        valueNames =
-            List.map .name mod.values
+    Docs.toBlocks mod
+        |> List.filterMap
+            (\block ->
+                case block of
+                    Docs.ValueBlock v ->
+                        Just v.name
 
-        unionNames =
-            List.map .name mod.unions
+                    Docs.UnionBlock u ->
+                        Just u.name
 
-        aliasNames =
-            List.map .name mod.aliases
+                    Docs.AliasBlock a ->
+                        Just a.name
 
-        binopNames =
-            List.map .name mod.binops
-    in
-    valueNames ++ unionNames ++ aliasNames ++ binopNames
+                    Docs.BinopBlock b ->
+                        Just b.name
+
+                    _ ->
+                        Nothing
+            )
 
 
 renderTreeEntrySelected : Bool -> Model -> TreeEntry -> Tui.Screen
@@ -1258,6 +1554,7 @@ renderTreeEntrySelected showBadges model entry =
             { fg = Just Ansi.Color.white
             , bg = Just Ansi.Color.blue
             , attributes = [ Tui.Bold ]
+            , hyperlink = Nothing
             }
             (indent ++ prefix ++ name ++ " ")
         ]
@@ -1308,13 +1605,13 @@ moduleBadge model moduleName =
         Just diff ->
             case Diff.moduleStatus diff moduleName of
                 Diff.ModuleNew ->
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } " + "
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
 
                 Diff.ModuleChanged ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
 
                 Diff.ModuleRemoved ->
-                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] } " - "
+                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " - "
 
                 Diff.ModuleUnchanged ->
                     Tui.text "   "
@@ -1327,8 +1624,23 @@ moduleBadge model moduleName =
 -- RIGHT PANE
 
 
+docsPaneWidth : { a | width : Int } -> Int
+docsPaneWidth ctx =
+    let
+        modulesWidth =
+            min 28 (ctx.width // 4)
+
+        itemsWidth =
+            20
+
+        borders =
+            6
+    in
+    max 20 (ctx.width - modulesWidth - itemsWidth - borders)
+
+
 rightPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
-rightPane _ model =
+rightPane ctx model =
     if model.loadingDiff then
         Layout.pane "docs"
             { title = "Loading..."
@@ -1343,85 +1655,54 @@ rightPane _ model =
             )
 
     else
-        case model.rightView of
-            DocsView ->
-                docsPane model
+        let
+            wrapWidth =
+                docsPaneWidth ctx - 2
 
-            DiffView ->
-                diffPane model
+            -- Check if cache is fresh; if not, use it anyway but it'll be refreshed next update
+            cached =
+                case model.cachedRightPane of
+                    Just c ->
+                        if c.key == rightPaneCacheKey wrapWidth model then
+                            c
+
+                        else
+                            buildRightPaneCache wrapWidth model (rightPaneCacheKey wrapWidth model)
+
+                    Nothing ->
+                        buildRightPaneCache wrapWidth model (rightPaneCacheKey wrapWidth model)
+        in
+        Layout.pane "docs"
+            { title = cached.title
+            , width = Layout.fill
+            }
+            (Layout.content cached.lines)
+            |> withScrollPercentFooter model cached.lines
 
 
-docsPane : Model -> Layout.Pane Msg
-docsPane model =
+
+cappedScrollDown : Model -> Int -> Layout.State
+cappedScrollDown model delta =
     let
-        ( title, docsLines ) =
-            case selectedEntry model of
-                Just (Leaf { name }) ->
-                    case findModule name model.modules of
-                        Just mod ->
-                            ( "Docs: " ++ name, renderModuleDocs mod )
+        ctx =
+            Layout.contextOf model.layout
 
-                        Nothing ->
-                            ( "Docs: " ++ name, [ Tui.text ("Module " ++ name ++ " not found") ] )
+        contentLines =
+            List.length (currentDocsContent model)
 
-                Just (Group { prefix }) ->
-                    ( "Docs: " ++ prefix, [ Tui.text ("Select a module under " ++ prefix) ] )
+        visibleHeight =
+            ctx.height - 2
 
-                Nothing ->
-                    ( "Docs", [ Tui.text "No module selected" ] )
+        currentOffset =
+            Layout.scrollPosition "docs" model.layout
+
+        maxOffset =
+            max 0 (contentLines - visibleHeight)
+
+        clampedDelta =
+            min delta (max 0 (maxOffset - currentOffset))
     in
-    Layout.pane "docs"
-        { title = title
-        , width = Layout.fill
-        }
-        (Layout.content docsLines)
-        |> withScrollPercentFooter model docsLines
-
-
-diffPane : Model -> Layout.Pane Msg
-diffPane model =
-    let
-        diffLines =
-            case model.diff of
-                Just diff ->
-                    let
-                        magnitudeHeader =
-                            [ magnitudeLine diff.magnitude
-                            , Tui.text ""
-                            ]
-
-                        entryDiffLines =
-                            case selectedEntry model of
-                                Just (Leaf { name }) ->
-                                    if name == "README" then
-                                        renderReadmeDiff diff
-
-                                    else
-                                        renderModuleDiff diff model.modules name
-
-                                _ ->
-                                    [ Tui.text "No module selected" ]
-                    in
-                    magnitudeHeader ++ entryDiffLines
-
-                Nothing ->
-                    [ Tui.text "No diff data" ]
-    in
-    let
-        title =
-            case model.diffVersion of
-                Just version ->
-                    "Diff vs " ++ version
-
-                Nothing ->
-                    "Diff"
-    in
-    Layout.pane "docs"
-        { title = title
-        , width = Layout.fill
-        }
-        (Layout.content diffLines)
-
+    Layout.scrollDown "docs" clampedDelta model.layout
 
 
 withScrollPercentFooter : Model -> List Tui.Screen -> Layout.Pane Msg -> Layout.Pane Msg
@@ -1452,21 +1733,36 @@ withScrollPercentFooter model contentLines pane =
     else
         pane
             |> Layout.withFooterScreen
-                (Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } percent)
+                (Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } percent)
+
+
+
+wrapLines : Int -> List Tui.Screen -> List Tui.Screen
+wrapLines maxWidth lines =
+    if maxWidth <= 0 then
+        lines
+
+    else
+        List.concatMap (Tui.wrapWidth maxWidth) lines
 
 
 
 -- DOCS RENDERING
 
 
-renderModuleDocs : Docs.Module -> List Tui.Screen
-renderModuleDocs mod =
+renderModuleDocs : Int -> Docs.Module -> List Tui.Screen
+renderModuleDocs wrapWidth mod =
+    renderModuleDocsWithGutter wrapWidth Ansi.Color.brightBlack mod
+
+
+renderModuleDocsWithGutter : Int -> Ansi.Color.Color -> Docs.Module -> List Tui.Screen
+renderModuleDocsWithGutter wrapWidth gutterColor mod =
     let
         blocks =
             Docs.toBlocks mod
 
         separator =
-            [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+            [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing }
                 (String.repeat 40 "─")
             , Tui.text ""
             ]
@@ -1476,34 +1772,35 @@ renderModuleDocs mod =
             (\block ->
                 case block of
                     Docs.MarkdownBlock _ ->
-                        renderBlock block ++ [ Tui.text "" ]
+                        renderBlock wrapWidth gutterColor block ++ [ Tui.text "" ]
 
                     _ ->
-                        separator ++ renderBlock block ++ [ Tui.text "" ]
+                        separator ++ renderBlock wrapWidth gutterColor block ++ [ Tui.text "" ]
             )
 
 
-renderBlock : Docs.Block -> List Tui.Screen
-renderBlock block =
+renderBlock : Int -> Ansi.Color.Color -> Docs.Block -> List Tui.Screen
+renderBlock wrapWidth gutterColor block =
     case block of
         Docs.ValueBlock value ->
-            renderValueTui value
-                |> addGutter Ansi.Color.blue
+            renderValueTui wrapWidth value
+                |> addGutter gutterColor
 
         Docs.UnionBlock union ->
-            renderUnionTui union
-                |> addGutter Ansi.Color.green
+            renderUnionTui wrapWidth union
+                |> addGutter gutterColor
 
         Docs.AliasBlock alias_ ->
-            renderAliasTui alias_
-                |> addGutter Ansi.Color.yellow
+            renderAliasTui wrapWidth alias_
+                |> addGutter gutterColor
 
         Docs.BinopBlock binop ->
-            renderBinopTui binop
-                |> addGutter Ansi.Color.magenta
+            renderBinopTui wrapWidth binop
+                |> addGutter gutterColor
 
         Docs.MarkdownBlock markdown ->
             renderMarkdownToScreens (String.trim markdown)
+                |> wrapLines wrapWidth
 
         Docs.UnknownBlock name ->
             [ Tui.text ("  (unknown: " ++ name ++ ")") ]
@@ -1513,13 +1810,13 @@ addGutter : Ansi.Color.Color -> List Tui.Screen -> List Tui.Screen
 addGutter color lines =
     let
         gutterChar =
-            Tui.styled { fg = Just color, bg = Nothing, attributes = [] } "┃ "
+            Tui.styled { fg = Just color, bg = Nothing, attributes = [], hyperlink = Nothing } "┃ "
     in
     List.map (\line -> Tui.concat [ gutterChar, line ]) lines
 
 
-renderValueTui : Docs.Value -> List Tui.Screen
-renderValueTui { name, comment, tipe } =
+renderValueTui : Int -> Docs.Value -> List Tui.Screen
+renderValueTui wrapWidth { name, comment, tipe } =
     let
         prefixWidth =
             String.length name + 3
@@ -1531,32 +1828,32 @@ renderValueTui { name, comment, tipe } =
             case typeLines of
                 [ oneLine ] ->
                     [ Tui.concat
-                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } name
                         , Tui.text " : "
-                        , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } oneLine
+                        , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing } oneLine
                         ]
                     ]
 
                 multipleLines ->
                     Tui.concat
-                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } name
                         , Tui.text " :"
                         ]
                         :: List.map
                             (\line ->
-                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                                     ("    " ++ line)
                             )
                             multipleLines
 
         commentLines =
-            renderDocComment comment
+            renderDocComment wrapWidth comment
     in
     header ++ commentLines
 
 
-renderUnionTui : Docs.Union -> List Tui.Screen
-renderUnionTui { name, comment, args, tags } =
+renderUnionTui : Int -> Docs.Union -> List Tui.Screen
+renderUnionTui wrapWidth { name, comment, args, tags } =
     let
         typeVars =
             case args of
@@ -1567,7 +1864,7 @@ renderUnionTui { name, comment, args, tags } =
                     " " ++ String.join " " args
 
         header =
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
                 ("type " ++ name ++ typeVars)
 
         constructorLines =
@@ -1576,17 +1873,17 @@ renderUnionTui { name, comment, args, tags } =
                     []
 
                 first :: rest ->
-                    Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                    Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                         ("    = " ++ renderTag first)
                         :: List.map
                             (\t ->
-                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                                     ("    | " ++ renderTag t)
                             )
                             rest
 
         commentLines =
-            renderDocComment comment
+            renderDocComment wrapWidth comment
     in
     header :: constructorLines ++ commentLines
 
@@ -1601,8 +1898,8 @@ renderTag ( tagName, tagArgs ) =
             tagName ++ " " ++ String.join " " (List.map Render.typeToString tagArgs)
 
 
-renderAliasTui : Docs.Alias -> List Tui.Screen
-renderAliasTui { name, comment, args, tipe } =
+renderAliasTui : Int -> Docs.Alias -> List Tui.Screen
+renderAliasTui wrapWidth { name, comment, args, tipe } =
     let
         typeVars =
             case args of
@@ -1613,25 +1910,25 @@ renderAliasTui { name, comment, args, tipe } =
                     " " ++ String.join " " args
 
         header =
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
                 ("type alias " ++ name ++ typeVars ++ " =")
 
         typeBodyLines =
             Render.typeToLines 6 tipe
                 |> List.map
                     (\line ->
-                        Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                        Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                             ("    " ++ line)
                     )
 
         commentLines =
-            renderDocComment comment
+            renderDocComment wrapWidth comment
     in
     header :: typeBodyLines ++ commentLines
 
 
-renderBinopTui : Docs.Binop -> List Tui.Screen
-renderBinopTui { name, comment, tipe } =
+renderBinopTui : Int -> Docs.Binop -> List Tui.Screen
+renderBinopTui wrapWidth { name, comment, tipe } =
     let
         displayName =
             "(" ++ name ++ ")"
@@ -1646,42 +1943,48 @@ renderBinopTui { name, comment, tipe } =
             case typeLines of
                 [ oneLine ] ->
                     [ Tui.concat
-                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } displayName
                         , Tui.text " : "
-                        , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } oneLine
+                        , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing } oneLine
                         ]
                     ]
 
                 multipleLines ->
                     Tui.concat
-                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
+                        [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } displayName
                         , Tui.text " :"
                         ]
                         :: List.map
                             (\line ->
-                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                                     ("    " ++ line)
                             )
                             multipleLines
 
         commentLines =
-            renderDocComment comment
+            renderDocComment wrapWidth comment
     in
     header ++ commentLines
 
 
-renderDocComment : String -> List Tui.Screen
-renderDocComment comment =
+renderDocComment : Int -> String -> List Tui.Screen
+renderDocComment wrapWidth comment =
     let
         trimmed =
             String.trim comment
+
+        -- Account for indent (4) + gutter (2) when wrapping
+        commentWidth =
+            wrapWidth - 6
     in
     if String.isEmpty trimmed then
         []
 
     else
         Tui.text ""
-            :: renderMarkdownToScreens trimmed
+            :: (renderMarkdownToScreens trimmed
+                    |> wrapLines commentWidth
+               )
             |> List.map (indentScreen "    ")
 
 
@@ -1730,23 +2033,23 @@ tuiRenderer =
     , blockQuote = tuiBlockQuote
     , html = Markdown.Html.oneOf []
     , text = \s -> [ Tui.text (String.replace "\n" " " s) ]
-    , codeSpan = \code -> [ Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } code ]
-    , strong = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } (inlineChildrenToString children) ]
-    , emphasis = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Italic ] } (inlineChildrenToString children) ]
-    , strikethrough = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Strikethrough ] } (inlineChildrenToString children) ]
+    , codeSpan = \code -> [ Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing } code ]
+    , strong = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } (inlineChildrenToString children) ]
+    , emphasis = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Italic ], hyperlink = Nothing } (inlineChildrenToString children) ]
+    , strikethrough = \children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Strikethrough ], hyperlink = Nothing } (inlineChildrenToString children) ]
     , hardLineBreak = [ Tui.text "\n" ]
     , link = tuiLink
     , image = tuiImage
     , unorderedList = tuiUnorderedList
     , orderedList = tuiOrderedList
     , codeBlock = tuiCodeBlock
-    , thematicBreak = [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } (String.repeat 40 "─") ]
+    , thematicBreak = [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } (String.repeat 40 "─") ]
     , table = \children -> List.concat children
     , tableHeader = \children -> List.concat children
     , tableBody = \children -> List.concat children
     , tableRow = \children -> [ Tui.concat (List.concatMap (\c -> Tui.text "| " :: c) children ++ [ Tui.text " |" ]) ]
     , tableCell = \_ children -> List.concat children
-    , tableHeaderCell = \_ children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } (inlineChildrenToString children) ]
+    , tableHeaderCell = \_ children -> [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } (inlineChildrenToString children) ]
     }
 
 
@@ -1788,7 +2091,7 @@ tuiHeading { level, children } =
                     "#### "
     in
     [ Tui.text ""
-    , Tui.styled { fg = Just Ansi.Color.magenta, bg = Nothing, attributes = [ Tui.Bold ] }
+    , Tui.styled { fg = Just Ansi.Color.magenta, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
         (prefix ++ inlineChildrenToString children)
     ]
 
@@ -1808,27 +2111,40 @@ tuiBlockQuote children =
         |> String.lines
         |> List.map
             (\line ->
-                Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+                Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing }
                     ("> " ++ line)
             )
 
 
 tuiLink : { title : Maybe String, destination : String } -> List (List Tui.Screen) -> List Tui.Screen
 tuiLink { destination } children =
-    [ Tui.concat
-        [ Tui.styled { fg = Just Ansi.Color.blue, bg = Nothing, attributes = [ Tui.Underline ] }
-            (inlineChildrenToString children)
-        , Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
-            (" (" ++ destination ++ ")")
+    let
+        linkText =
+            inlineChildrenToString children
+
+        isExternal =
+            String.startsWith "http://" destination
+                || String.startsWith "https://" destination
+    in
+    if isExternal then
+        [ Tui.text linkText
+            |> Tui.underline
+            |> Tui.fg Ansi.Color.blue
+            |> Tui.link { url = destination }
         ]
-    ]
+
+    else
+        -- Internal Elm doc link: #definition or Module#definition
+        [ Tui.text linkText
+            |> Tui.fg Ansi.Color.cyan
+        ]
 
 
 tuiImage : { alt : String, src : String, title : Maybe String } -> List Tui.Screen
 tuiImage { alt, src } =
     [ Tui.concat
-        [ Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } ("[image: " ++ alt ++ "]")
-        , Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } (" (" ++ src ++ ")")
+        [ Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [], hyperlink = Nothing } ("[image: " ++ alt ++ "]")
+        , Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } (" (" ++ src ++ ")")
         ]
     ]
 
@@ -1841,13 +2157,13 @@ tuiUnorderedList items =
                 bullet =
                     case task of
                         NoTask ->
-                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } "  * "
+                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } "  * "
 
                         IncompleteTask ->
-                            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } "  [ ] "
+                            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [], hyperlink = Nothing } "  [ ] "
 
                         CompletedTask ->
-                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } "  [x] "
+                            Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } "  [x] "
 
                 -- Each child is a block (usually a paragraph) which is List Tui.Screen.
                 -- Flatten all children into one line for simple list items.
@@ -1868,7 +2184,7 @@ tuiOrderedList startIndex items =
                     String.fromInt (startIndex + i) ++ ". "
 
                 numScreen =
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } ("  " ++ num)
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } ("  " ++ num)
 
                 childContent =
                     flattenInlineChildren children
@@ -1887,8 +2203,12 @@ tuiCodeBlock { body, language } =
 
         trimmedBody =
             String.trimRight body
+
+        codeLines =
+            highlightCodeToScreens lang trimmedBody
+                |> List.map (\line -> Tui.concat [ Tui.text "  ", line ])
     in
-    highlightCodeToScreens lang trimmedBody
+    codeLines ++ [ Tui.text "" ]
 
 
 
@@ -1947,7 +2267,7 @@ highlightCodeToScreens language body =
                 |> String.lines
                 |> List.map
                     (\line ->
-                        Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] } line
+                        Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [], hyperlink = Nothing } line
                     )
     in
     case parser of
@@ -1971,15 +2291,15 @@ tuiSyntaxTransform =
     , highlight = identity
     , addition = identity
     , deletion = identity
-    , default = Tui.styled { fg = Just Ansi.Color.white, bg = Nothing, attributes = [] }
-    , comment = Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
-    , style1 = Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
-    , style2 = Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] }
-    , style3 = Tui.styled { fg = Just Ansi.Color.magenta, bg = Nothing, attributes = [] }
-    , style4 = Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [] }
-    , style5 = Tui.styled { fg = Just Ansi.Color.blue, bg = Nothing, attributes = [] }
-    , style6 = Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [] }
-    , style7 = Tui.styled { fg = Just Ansi.Color.brightCyan, bg = Nothing, attributes = [] }
+    , default = Tui.styled { fg = Just Ansi.Color.white, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , comment = Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style1 = Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style2 = Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style3 = Tui.styled { fg = Just Ansi.Color.magenta, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style4 = Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style5 = Tui.styled { fg = Just Ansi.Color.blue, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style6 = Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [], hyperlink = Nothing }
+    , style7 = Tui.styled { fg = Just Ansi.Color.brightCyan, bg = Nothing, attributes = [], hyperlink = Nothing }
     }
 
 
@@ -2006,13 +2326,76 @@ magnitudeLine magnitude =
     in
     Tui.concat
         [ Tui.text "  "
-        , Tui.styled { fg = Just Ansi.Color.white, bg = Just color, attributes = [ Tui.Bold ] }
+        , Tui.styled { fg = Just Ansi.Color.white, bg = Just color, attributes = [ Tui.Bold ], hyperlink = Nothing }
             (" " ++ magnitude ++ " CHANGE ")
         ]
 
 
-renderModuleDiff : ApiDiff -> List Docs.Module -> String -> List Tui.Screen
-renderModuleDiff diff modules moduleName =
+changeSummaryLine : ApiDiff -> Tui.Screen
+changeSummaryLine diff =
+    let
+        addedCount =
+            List.length diff.addedModules
+                + (diff.changedModules |> List.map (\mc -> List.length mc.added) |> List.sum)
+
+        changedCount =
+            diff.changedModules |> List.map (\mc -> List.length mc.changed) |> List.sum
+
+        removedCount =
+            List.length diff.removedModules
+                + (diff.changedModules |> List.map (\mc -> List.length mc.removed) |> List.sum)
+
+        moduleCount =
+            List.length diff.addedModules
+                + List.length diff.removedModules
+                + List.length diff.changedModules
+
+        parts =
+            (if addedCount > 0 then
+                [ Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing }
+                    ("+" ++ String.fromInt addedCount ++ " added")
+                ]
+
+             else
+                []
+            )
+                ++ (if changedCount > 0 then
+                        [ Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [], hyperlink = Nothing }
+                            ("~" ++ String.fromInt changedCount ++ " changed")
+                        ]
+
+                    else
+                        []
+                   )
+                ++ (if removedCount > 0 then
+                        [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [], hyperlink = Nothing }
+                            ("-" ++ String.fromInt removedCount ++ " removed")
+                        ]
+
+                    else
+                        []
+                   )
+
+        separator =
+            Tui.text "  "
+
+        statsWithSeparators =
+            parts
+                |> List.intersperse separator
+
+        moduleCountText =
+            Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing }
+                (" across " ++ String.fromInt moduleCount ++ " modules")
+    in
+    Tui.concat
+        ([ Tui.text "  " ]
+            ++ statsWithSeparators
+            ++ [ moduleCountText ]
+        )
+
+
+renderModuleDiff : Int -> ApiDiff -> List Docs.Module -> String -> List Tui.Screen
+renderModuleDiff wrapWidth diff modules moduleName =
     let
         isNewModule =
             List.member moduleName diff.addedModules
@@ -2024,13 +2407,13 @@ renderModuleDiff diff modules moduleName =
             findModule moduleName modules
     in
     if isNewModule then
-        renderNewModule moduleName maybeModule
+        renderNewModule wrapWidth moduleName maybeModule
 
     else if isRemovedModule then
         renderRemovedModule moduleName
 
     else
-        renderChangedModule diff moduleName maybeModule
+        renderChangedModule wrapWidth diff moduleName maybeModule
 
 
 findModule : String -> List Docs.Module -> Maybe Docs.Module
@@ -2047,21 +2430,21 @@ findModule name modules =
                 findModule name rest
 
 
-renderNewModule : String -> Maybe Docs.Module -> List Tui.Screen
-renderNewModule moduleName maybeModule =
+renderNewModule : Int -> String -> Maybe Docs.Module -> List Tui.Screen
+renderNewModule wrapWidth moduleName maybeModule =
     let
         header =
             [ Tui.concat
-                [ Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.green, attributes = [ Tui.Bold ] } " + "
+                [ Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.green, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
                 , Tui.text " "
-                , Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } moduleName
+                , Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } moduleName
                 ]
             , Tui.text ""
             ]
     in
     case maybeModule of
         Just mod ->
-            header ++ renderModuleDocs mod
+            header ++ renderModuleDocsWithGutter wrapWidth Ansi.Color.green mod
 
         Nothing ->
             header
@@ -2070,16 +2453,16 @@ renderNewModule moduleName maybeModule =
 renderRemovedModule : String -> List Tui.Screen
 renderRemovedModule moduleName =
     [ Tui.concat
-        [ Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.red, attributes = [ Tui.Bold ] } " - "
+        [ Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.red, attributes = [ Tui.Bold ], hyperlink = Nothing } " - "
         , Tui.text " "
-        , Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold, Tui.Strikethrough ] } moduleName
+        , Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold, Tui.Strikethrough ], hyperlink = Nothing } moduleName
         ]
     , Tui.text ""
     ]
 
 
-renderChangedModule : ApiDiff -> String -> Maybe Docs.Module -> List Tui.Screen
-renderChangedModule diff moduleName maybeModule =
+renderChangedModule : Int -> ApiDiff -> String -> Maybe Docs.Module -> List Tui.Screen
+renderChangedModule wrapWidth diff moduleName maybeModule =
     let
         moduleChanges =
             Diff.findModuleChanges moduleName diff.changedModules
@@ -2103,14 +2486,14 @@ renderChangedModule diff moduleName maybeModule =
             addedItems
                 |> List.concatMap
                     (\itemName ->
-                        renderItemBlock diff moduleName itemName Diff.Added maybeModule
+                        renderItemBlock wrapWidth diff moduleName itemName Diff.Added maybeModule
                     )
 
         changedSection =
             changedItems
                 |> List.concatMap
                     (\itemName ->
-                        renderItemBlock diff moduleName itemName Diff.Changed maybeModule
+                        renderItemBlock wrapWidth diff moduleName itemName Diff.Changed maybeModule
                     )
 
         removedSection =
@@ -2118,10 +2501,10 @@ renderChangedModule diff moduleName maybeModule =
                 []
 
             else
-                Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] } "  Removed:"
+                Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } "  Removed:"
                     :: List.map
                         (\item ->
-                            Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ] } ("    " ++ item)
+                            Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ], hyperlink = Nothing } ("    " ++ item)
                         )
                         removedItems
                     ++ [ Tui.text "" ]
@@ -2139,16 +2522,16 @@ renderChangedModule diff moduleName maybeModule =
         allSections
 
 
-renderItemBlock : ApiDiff -> String -> String -> Diff.DiffStatus -> Maybe Docs.Module -> List Tui.Screen
-renderItemBlock diff moduleName itemName status maybeModule =
+renderItemBlock : Int -> ApiDiff -> String -> String -> Diff.DiffStatus -> Maybe Docs.Module -> List Tui.Screen
+renderItemBlock wrapWidth diff moduleName itemName status maybeModule =
     let
         badge =
             case status of
                 Diff.Added ->
-                    Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.green, attributes = [ Tui.Bold ] } " + "
+                    Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.green, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
 
                 Diff.Changed ->
-                    Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.yellow, attributes = [ Tui.Bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.white, bg = Just Ansi.Color.yellow, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
 
                 _ ->
                     Tui.text "   "
@@ -2161,12 +2544,23 @@ renderItemBlock diff moduleName itemName status maybeModule =
                 _ ->
                     []
 
+        gutterColor =
+            case status of
+                Diff.Added ->
+                    Ansi.Color.green
+
+                Diff.Changed ->
+                    Ansi.Color.yellow
+
+                _ ->
+                    Ansi.Color.brightBlack
+
         blockLines =
             case maybeModule of
                 Just mod ->
                     case findBlock itemName mod of
                         Just block ->
-                            renderBlock block
+                            renderBlock wrapWidth gutterColor block
 
                         Nothing ->
                             [ Tui.concat [ badge, Tui.text (" " ++ itemName) ] ]
@@ -2191,7 +2585,7 @@ renderOldType diff moduleName itemName =
         Just typeValue ->
             case Decode.decodeValue Type.decoder typeValue of
                 Ok tipe ->
-                    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ] }
+                    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ], hyperlink = Nothing }
                         ("   " ++ itemName ++ " : " ++ Render.typeToString tipe)
                     ]
 
@@ -2230,7 +2624,7 @@ renderReadmeDiff : ApiDiff -> List Tui.Screen
 renderReadmeDiff diff =
     case diff.readmeDiff of
         Just readmeText ->
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  README Changes"
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } "  README Changes"
                 :: Tui.text ""
                 :: renderUnifiedDiffLines readmeText
 
@@ -2250,7 +2644,7 @@ renderCommentDiffs diff moduleName =
                 []
 
             else
-                Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  Doc changes:"
+                Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } "  Doc changes:"
                     :: Tui.text ""
                     :: List.concatMap
                         (\( itemName, cdiff ) ->
@@ -2262,7 +2656,7 @@ renderCommentDiffs diff moduleName =
                                     else
                                         itemName
                             in
-                            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } ("    " ++ label ++ ":")
+                            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } ("    " ++ label ++ ":")
                                 :: renderUnifiedDiffLines cdiff
                                 ++ [ Tui.text "" ]
                         )
@@ -2279,13 +2673,13 @@ renderUnifiedDiffLines diffText =
         |> List.map
             (\line ->
                 if String.startsWith "+ " line || String.startsWith "+" line then
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } ("    " ++ line)
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
 
                 else if String.startsWith "- " line || String.startsWith "-" line then
-                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [] } ("    " ++ line)
+                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
 
                 else
-                    Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } ("    " ++ line)
+                    Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
             )
 
 
@@ -2302,6 +2696,12 @@ subscriptions model =
          ]
             ++ (if model.loadingDiff then
                     [ Tui.Spinner.subscriptions SpinnerTick ]
+
+                else
+                    []
+               )
+            ++ (if Toast.hasToasts model.toasts then
+                    [ Tui.Sub.every 100 ToastTick ]
 
                 else
                     []

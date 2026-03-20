@@ -193,12 +193,26 @@ handleAction action model =
             ( model, Effect.exit )
 
         NavigateDown ->
-            ( { model | layout = Layout.navigateDown "modules" model.layout }
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                ( newLayout, _ ) =
+                    Layout.navigateDown "modules" (viewLayout ctx model) model.layout
+            in
+            ( { model | layout = newLayout }
             , Effect.none
             )
 
         NavigateUp ->
-            ( { model | layout = Layout.navigateUp "modules" model.layout }
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                ( newLayout, _ ) =
+                    Layout.navigateUp "modules" (viewLayout ctx model) model.layout
+            in
+            ( { model | layout = newLayout }
             , Effect.none
             )
 
@@ -332,7 +346,7 @@ viewLayout ctx model =
 
 modulesPaneWidth : Int -> Layout.Width
 modulesPaneWidth termWidth =
-    Layout.px (min 40 (termWidth // 3))
+    Layout.fixed (min 40 (termWidth // 3))
 
 
 entriesPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
@@ -368,6 +382,7 @@ renderEntrySelected diff entry =
             { fg = Nothing
             , bg = Nothing
             , attributes = [ Tui.Bold, Tui.Inverse ]
+            , hyperlink = Nothing
             }
             (" " ++ entryName entry ++ " ")
         ]
@@ -385,21 +400,21 @@ entryBadge : ApiDiff -> Entry -> Tui.Screen
 entryBadge diff entry =
     case entry of
         ReadmeEntry ->
-            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+            Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
 
         ModuleEntry name ->
             case Diff.moduleStatus diff name of
                 Diff.ModuleNew ->
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } " + "
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
 
                 Diff.ModuleChanged ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
 
                 Diff.ModuleRemoved ->
-                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] } " - "
+                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " - "
 
                 Diff.ModuleUnchanged ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
 
 
 diffPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
@@ -445,7 +460,7 @@ magnitudeLine magnitude =
                 _ ->
                     Ansi.Color.white
     in
-    Tui.styled { fg = Just color, bg = Nothing, attributes = [ Tui.Bold ] }
+    Tui.styled { fg = Just color, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
         ("  " ++ magnitude ++ " CHANGE")
 
 
@@ -463,7 +478,7 @@ renderReadmeDiff : ApiDiff -> List Tui.Screen
 renderReadmeDiff diff =
     case diff.readmeDiff of
         Just rdiff ->
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  README Changes"
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } "  README Changes"
                 :: Tui.text ""
                 :: renderUnifiedDiffLines rdiff
 
@@ -478,13 +493,13 @@ renderUnifiedDiffLines diffText =
         |> List.map
             (\line ->
                 if String.startsWith "+ " line || String.startsWith "+" line then
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [] } ("    " ++ line)
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
 
                 else if String.startsWith "- " line || String.startsWith "-" line then
-                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [] } ("    " ++ line)
+                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
 
                 else
-                    Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] } ("    " ++ line)
+                    Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
             )
 
 
@@ -514,7 +529,7 @@ renderNewModule : String -> Maybe Docs.Module -> List Tui.Screen
 renderNewModule moduleName maybeModule =
     let
         header =
-            [ Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] }
+            [ Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
                 ("  New module: " ++ moduleName)
             , Tui.text ""
             ]
@@ -529,7 +544,7 @@ renderNewModule moduleName maybeModule =
 
 renderRemovedModule : String -> List Tui.Screen
 renderRemovedModule moduleName =
-    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] }
+    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
         ("  Removed module: " ++ moduleName)
     , Tui.text ""
     ]
@@ -575,10 +590,10 @@ renderChangedModule diff moduleName maybeModule =
                 []
 
             else
-                Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ] } "  Removed:"
+                Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } "  Removed:"
                     :: List.map
                         (\item ->
-                            Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ] } ("    " ++ item)
+                            Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ], hyperlink = Nothing } ("    " ++ item)
                         )
                         removedItems
                     ++ [ Tui.text "" ]
@@ -602,10 +617,10 @@ renderItemBlock diff moduleName itemName status maybeModule =
         badge =
             case status of
                 Diff.Added ->
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ] } " + "
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
 
                 Diff.Changed ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ] } " ~ "
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
 
                 _ ->
                     Tui.text "   "
@@ -648,7 +663,7 @@ renderOldType diff moduleName itemName =
         Just typeValue ->
             case Decode.decodeValue Type.decoder typeValue of
                 Ok tipe ->
-                    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ] }
+                    [ Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Strikethrough ], hyperlink = Nothing }
                         ("   " ++ itemName ++ " : " ++ Render.typeToString tipe)
                     ]
 
@@ -735,9 +750,9 @@ renderValueTui { name, comment, tipe } =
 
         header =
             Tui.concat
-                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } name
+                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } name
                 , Tui.text " : "
-                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } typeStr
+                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing } typeStr
                 ]
 
         commentLines =
@@ -758,7 +773,7 @@ renderUnionTui { name, comment, args, tags } =
                     " " ++ String.join " " args
 
         header =
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
                 ("type " ++ name ++ typeVars)
 
         constructorLines =
@@ -767,11 +782,11 @@ renderUnionTui { name, comment, args, tags } =
                     []
 
                 first :: rest ->
-                    Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                    Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                         ("    = " ++ renderTag first)
                         :: List.map
                             (\t ->
-                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+                                Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                                     ("    | " ++ renderTag t)
                             )
                             rest
@@ -804,11 +819,11 @@ renderAliasTui { name, comment, args, tipe } =
                     " " ++ String.join " " args
 
         header =
-            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] }
+            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing }
                 ("type alias " ++ name ++ typeVars ++ " =")
 
         typeBody =
-            Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] }
+            Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing }
                 ("    " ++ Render.typeToString tipe)
 
         commentLines =
@@ -825,9 +840,9 @@ renderBinopTui { name, comment, tipe } =
 
         header =
             Tui.concat
-                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } displayName
+                [ Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } displayName
                 , Tui.text " : "
-                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [] } (Render.typeToString tipe)
+                , Tui.styled { fg = Just Ansi.Color.cyan, bg = Nothing, attributes = [], hyperlink = Nothing } (Render.typeToString tipe)
                 ]
 
         commentLines =
@@ -851,7 +866,7 @@ renderDocComment comment =
                     |> String.lines
                     |> List.map
                         (\line ->
-                            Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [] }
+                            Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing }
                                 ("    " ++ line)
                         )
                )
@@ -869,7 +884,7 @@ renderCommentDiffs diff moduleName =
                 []
 
             else
-                Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } "  Doc changes:"
+                Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } "  Doc changes:"
                     :: Tui.text ""
                     :: List.concatMap
                         (\( itemName, cdiff ) ->
@@ -881,7 +896,7 @@ renderCommentDiffs diff moduleName =
                                     else
                                         itemName
                             in
-                            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ] } ("    " ++ label ++ ":")
+                            Tui.styled { fg = Nothing, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } ("    " ++ label ++ ":")
                                 :: renderUnifiedDiffLines cdiff
                                 ++ [ Tui.text "" ]
                         )
