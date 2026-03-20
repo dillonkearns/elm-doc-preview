@@ -1233,7 +1233,13 @@ itemsPane model =
                         , hyperlink = Nothing
                         }
                         (name ++ " ")
-            , default = \name -> Tui.text name
+            , default =
+                \name ->
+                    if String.startsWith "# " name then
+                        Tui.text name |> Tui.dim |> Tui.bold
+
+                    else
+                        Tui.text name
             }
             items
         )
@@ -1480,12 +1486,17 @@ findLineForItem itemName lines =
                     text =
                         Tui.toString line
                 in
-                String.contains itemName text
-                    && (String.contains (itemName ++ " :") text
-                            || String.contains (itemName ++ " =") text
-                            || String.contains ("type " ++ itemName) text
-                            || String.contains ("type alias " ++ itemName) text
-                       )
+                if String.startsWith "# " itemName then
+                    -- Section heading: look for "## HeadingText" in rendered content
+                    String.contains ("## " ++ String.dropLeft 2 itemName) text
+
+                else
+                    String.contains itemName text
+                        && (String.contains (itemName ++ " :") text
+                                || String.contains (itemName ++ " =") text
+                                || String.contains ("type " ++ itemName) text
+                                || String.contains ("type alias " ++ itemName) text
+                           )
             )
         |> List.head
         |> Maybe.map Tuple.first
@@ -1510,9 +1521,28 @@ moduleItemNames mod =
                     Docs.BinopBlock b ->
                         Just b.name
 
+                    Docs.MarkdownBlock markdown ->
+                        extractHeading markdown
+
                     _ ->
                         Nothing
             )
+
+
+extractHeading : String -> Maybe String
+extractHeading markdown =
+    markdown
+        |> String.trim
+        |> String.lines
+        |> List.filterMap
+            (\line ->
+                if String.startsWith "## " (String.trim line) then
+                    Just ("# " ++ String.trim (String.dropLeft 3 (String.trim line)))
+
+                else
+                    Nothing
+            )
+        |> List.head
 
 
 renderTreeEntrySelected : Bool -> Model -> TreeEntry -> Tui.Screen

@@ -403,6 +403,14 @@ suite =
                         -- Docs should scroll to show bar near the top
                         |> TuiTest.ensureViewHas "┃ bar"
                         |> TuiTest.expectRunning
+            , test "items pane shows section headings from module comment" <|
+                \() ->
+                    startBrowse [ sectionedModule ]
+                        -- 2 values + 2 section headings = 4 items total
+                        |> TuiTest.ensureViewHas "1 of 4"
+                        |> TuiTest.ensureViewHas "# Basics"
+                        |> TuiTest.ensureViewHas "# Advanced"
+                        |> TuiTest.expectRunning
             , test "items pane shows no items for group headers" <|
                 \() ->
                     startBrowse treeModules
@@ -739,6 +747,26 @@ multiValueModule =
           }
         , { name = "bar"
           , comment = "Second function."
+          , tipe = Type.Type "Int" []
+          }
+        ]
+    , binops = []
+    }
+
+
+sectionedModule : Docs.Module
+sectionedModule =
+    { name = "Example"
+    , comment = "Example module.\n\n## Basics\n\n@docs foo\n\n## Advanced\n\n@docs bar"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "foo"
+          , comment = "A basic function."
+          , tipe = Type.Type "String" []
+          }
+        , { name = "bar"
+          , comment = "An advanced function."
           , tipe = Type.Type "Int" []
           }
         ]
