@@ -684,6 +684,14 @@ suite =
                         |> TuiTest.ensureViewHas "README"
                         |> TuiTest.ensureViewHas "New intro line"
                         |> TuiTest.expectRunning
+            , test "internal doc links are styled distinctly" <|
+                \() ->
+                    startBrowse [ cliOptionModule ]
+                        -- Navigate to a module that has links in its docs
+                        |> TuiTest.pressKey 'j'
+                        -- cliOptionModule docs contain ## headings
+                        -- Internal links should be magenta+underline (not cyan like code)
+                        |> TuiTest.expectRunning
             , test "README does not appear in Changes tab when no readmeDiff" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules

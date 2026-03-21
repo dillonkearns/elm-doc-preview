@@ -511,6 +511,7 @@ type Action
     | CyclePaneFocusReverse
     | ScrollToSelectedItem
     | OpenPackagePicker
+    | FollowLink
 
 
 handleAction : Action -> Model -> ( Model, Effect.Effect Msg )
@@ -945,6 +946,11 @@ handleAction action model =
             , Effect.none
             )
 
+        FollowLink ->
+            -- TODO: implement link following from docs pane
+            -- For now, this is a placeholder for the Enter keybinding in docs pane
+            ( model, Effect.none )
+
         OpenPackagePicker ->
             if List.isEmpty model.dependencies then
                 ( model, Effect.none )
@@ -1108,6 +1114,7 @@ docsBindings =
         , Keybinding.binding (Tui.Character '<') "Page up" ScrollDocsPageUp
             |> Keybinding.withAlternate Tui.PageUp
         , Keybinding.binding (Tui.Character 'o') "Maximize" ToggleMaximize
+        , Keybinding.binding Tui.Enter "Follow link" FollowLink
         ]
 
 
@@ -2504,8 +2511,10 @@ tuiLink { destination } children =
 
     else
         -- Internal Elm doc link: #definition or Module#definition
+        -- Use magenta + underline to distinguish from code spans (cyan)
         [ Tui.text linkText
-            |> Tui.fg Ansi.Color.cyan
+            |> Tui.fg Ansi.Color.magenta
+            |> Tui.underline
         ]
 
 
