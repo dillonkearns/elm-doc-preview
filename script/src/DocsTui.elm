@@ -58,6 +58,7 @@ type alias Model =
     , cachedDocsContent : Maybe { key : String, content : List Tui.Screen }
     , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
     , itemLinePositions : List ( String, Int )
+    , internalLinks : List { line : Int, destination : String, text : String }
     , dependencies : List String
     , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
     , readme : Maybe String
@@ -121,6 +122,7 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
       , cachedDocsContent = Nothing
       , cachedRightPane = Nothing
       , itemLinePositions = []
+      , internalLinks = []
       , dependencies = dependencies
       , loadPackageDocs = loadPackageDocs
       , readme = readme
@@ -513,6 +515,107 @@ type Action
     | ScrollToSelectedItem
     | OpenPackagePicker
     | FollowLink
+
+
+navigateToLink : String -> Model -> ( Model, Effect.Effect Msg )
+navigateToLink destination model =
+    let
+        ( targetModule, targetItem ) =
+            if String.startsWith "#" destination then
+                ( Nothing, Just (String.dropLeft 1 destination) )
+
+            else
+                case String.split "#" destination of
+                    [ moduleName, itemName ] ->
+                        ( Just moduleName, Just itemName )
+
+                    [ moduleName ] ->
+                        ( Just moduleName, Nothing )
+
+                    _ ->
+                        ( Nothing, Nothing )
+    in
+    case targetModule of
+        Just moduleName ->
+            let
+                entries =
+                    visibleEntries model
+
+                maybeIdx =
+                    entries
+                        |> List.indexedMap Tuple.pair
+                        |> List.filter (\( _, entry ) -> ModuleTree.entryName entry == moduleName)
+                        |> List.head
+                        |> Maybe.map Tuple.first
+            in
+            case maybeIdx of
+                Just idx ->
+                    let
+                        newModel =
+                            { model
+                                | layout =
+                                    model.layout
+                                        |> Layout.setSelectedIndex "modules" idx
+                                        |> Layout.resetScroll "docs"
+                                        |> Layout.setSelectedIndex "items" 0
+                                , cachedDocsContent = Nothing
+                                , cachedRightPane = Nothing
+                            }
+                                |> refreshRightPaneCache
+
+                        finalModel =
+                            case targetItem of
+                                Just item ->
+                                    let
+                                        scrollTarget =
+                                            newModel.itemLinePositions
+                                                |> List.filter (\( name, _ ) -> name == item)
+                                                |> List.head
+                                                |> Maybe.map Tuple.second
+                                                |> Maybe.withDefault 0
+                                    in
+                                    { newModel
+                                        | layout =
+                                            newModel.layout
+                                                |> Layout.resetScroll "docs"
+                                                |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
+                                    }
+
+                                Nothing ->
+                                    newModel
+                    in
+                    ( finalModel
+                        |> (\m -> { m | toasts = Toast.toast ("→ " ++ moduleName) m.toasts })
+                    , Effect.none
+                    )
+
+                Nothing ->
+                    ( { model | toasts = Toast.errorToast ("Module " ++ moduleName ++ " not found") model.toasts }
+                    , Effect.none
+                    )
+
+        Nothing ->
+            case targetItem of
+                Just item ->
+                    let
+                        scrollTarget =
+                            model.itemLinePositions
+                                |> List.filter (\( name, _ ) -> name == item)
+                                |> List.head
+                                |> Maybe.map Tuple.second
+                                |> Maybe.withDefault 0
+                    in
+                    ( { model
+                        | layout =
+                            model.layout
+                                |> Layout.resetScroll "docs"
+                                |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
+                      }
+                    , Effect.none
+                    )
+
+                Nothing ->
+                    ( model, Effect.none )
 
 
 handleAction : Action -> Model -> ( Model, Effect.Effect Msg )
@@ -948,9 +1051,31 @@ handleAction action model =
             )
 
         FollowLink ->
-            -- TODO: implement link following from docs pane
-            -- For now, this is a placeholder for the Enter keybinding in docs pane
-            ( model, Effect.none )
+            let
+                scrollOffset =
+                    Layout.scrollPosition "docs" model.layout
+
+                ctx =
+                    Layout.contextOf model.layout
+
+                visibleTop =
+                    scrollOffset
+
+                visibleBottom =
+                    scrollOffset + ctx.height - 4
+
+                -- Find the first internal link in the visible area
+                visibleLink =
+                    model.internalLinks
+                        |> List.filter (\link -> link.line >= visibleTop && link.line <= visibleBottom)
+                        |> List.head
+            in
+            case visibleLink of
+                Just link ->
+                    navigateToLink link.destination model
+
+                Nothing ->
+                    ( model, Effect.none )
 
         OpenPackagePicker ->
             if List.isEmpty model.dependencies then
@@ -1570,6 +1695,62 @@ syncItemsToScroll model =
     { model | layout = Layout.setSelectedIndex "items" bestIndex model.layout }
 
 
+extractInternalLinks : List Tui.Screen -> List { line : Int, destination : String, text : String }
+extractInternalLinks lines =
+    lines
+        |> List.indexedMap
+            (\idx line ->
+                let
+                    text =
+                        Tui.toString line
+                in
+                -- Look for magenta underlined text (our internal link style)
+                -- We can't perfectly detect styled regions from toString,
+                -- but we can scan the module comment for link destinations
+                -- For now, return empty - will populate from module comment
+                []
+            )
+        |> List.concat
+
+
+findLinkLine : String -> List Tui.Screen -> Int
+findLinkLine linkText lines =
+    lines
+        |> List.indexedMap Tuple.pair
+        |> List.filter (\( _, line ) -> String.contains linkText (Tui.toString line))
+        |> List.head
+        |> Maybe.map Tuple.first
+        |> Maybe.withDefault -1
+
+
+extractLinksFromComment : String -> List { destination : String, text : String }
+extractLinksFromComment comment =
+    -- Parse markdown links: [text](destination) where destination doesn't start with http
+    comment
+        |> String.split "["
+        |> List.drop 1
+        |> List.filterMap
+            (\segment ->
+                case String.split "](" segment of
+                    linkText :: rest :: _ ->
+                        let
+                            destination =
+                                rest
+                                    |> String.split ")"
+                                    |> List.head
+                                    |> Maybe.withDefault ""
+                        in
+                        if String.startsWith "http" destination || String.isEmpty destination then
+                            Nothing
+
+                        else
+                            Just { destination = destination, text = linkText }
+
+                    _ ->
+                        Nothing
+            )
+
+
 refreshRightPaneCache : Model -> Model
 refreshRightPaneCache model =
     let
@@ -1598,7 +1779,44 @@ refreshRightPaneCache model =
                                 ( itemName, findLineForItem itemName cache.lines )
                             )
             in
-            { m | cachedRightPane = Just cache, itemLinePositions = positions }
+            let
+                -- Extract internal links from the selected module/entry's comment
+                links =
+                    case selectedEntry m of
+                        Just (Leaf { name }) ->
+                            case findModule name m.modules of
+                                Just mod ->
+                                    let
+                                        allComments =
+                                            mod.comment
+                                                ++ String.concat (List.map .comment mod.values)
+                                                ++ String.concat (List.map .comment mod.unions)
+                                                ++ String.concat (List.map .comment mod.aliases)
+
+                                        rawLinks =
+                                            extractLinksFromComment allComments
+                                    in
+                                    rawLinks
+                                        |> List.filterMap
+                                            (\link ->
+                                                let
+                                                    linePos =
+                                                        findLinkLine link.text cache.lines
+                                                in
+                                                if linePos >= 0 then
+                                                    Just { line = linePos, destination = link.destination, text = link.text }
+
+                                                else
+                                                    Nothing
+                                            )
+
+                                Nothing ->
+                                    []
+
+                        _ ->
+                            []
+            in
+            { m | cachedRightPane = Just cache, itemLinePositions = positions, internalLinks = links }
     in
     case model.cachedRightPane of
         Just cached ->
