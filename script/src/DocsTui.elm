@@ -51,6 +51,7 @@ type alias Model =
     -- filterInput removed — using native Layout.selectableList filtering
     , versions : List String
     , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+    , selectedModuleName : String
     , loadingDiff : Bool
     , diffVersion : Maybe String
     , spinnerTick : Int
@@ -116,6 +117,7 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
       -- filterInput removed
       , versions = versions
       , loadDiff = loadDiff
+      , selectedModuleName = ""
       , loadingDiff = False
       , diffVersion = Nothing
       , spinnerTick = 0
@@ -204,23 +206,31 @@ changedModuleEntries diff =
 
 selectedEntry : Model -> Maybe TreeEntry
 selectedEntry model =
-    let
-        idx =
-            Layout.selectedIndex "modules" model.layout
-    in
-    visibleEntries model
-        |> List.drop idx
-        |> List.head
+    if String.isEmpty model.selectedModuleName then
+        let
+            idx =
+                Layout.selectedIndex "modules" model.layout
+        in
+        visibleEntries model
+            |> List.drop idx
+            |> List.head
+
+    else
+        Just (Leaf { name = model.selectedModuleName, depth = 0 })
 
 
 selectedModule : Model -> Maybe Docs.Module
 selectedModule model =
-    case selectedEntry model of
-        Just (Leaf { name }) ->
-            findModule name model.modules
+    if not (String.isEmpty model.selectedModuleName) then
+        findModule model.selectedModuleName model.modules
 
-        _ ->
-            Nothing
+    else
+        case selectedEntry model of
+            Just (Leaf { name }) ->
+                findModule name model.modules
+
+            _ ->
+                Nothing
 
 
 handleKeyPressed : Tui.KeyEvent -> Model -> ( Model, Effect.Effect Msg )
@@ -352,12 +362,21 @@ update msg model =
                     , Effect.none
                     )
 
-        SelectEntry _ ->
+        SelectEntry idx ->
+            let
+                entryName =
+                    visibleEntries model
+                        |> List.drop idx
+                        |> List.head
+                        |> Maybe.map ModuleTree.entryName
+                        |> Maybe.withDefault ""
+            in
             ( { model
                 | layout =
                     model.layout
                         |> Layout.resetScroll "docs"
                         |> Layout.setSelectedIndex "items" 0
+                , selectedModuleName = entryName
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
               }
