@@ -59,6 +59,7 @@ type alias Model =
     , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
     , itemLinePositions : List ( String, Int )
     , internalLinks : List { line : Int, destination : String, text : String }
+    , pendingCacheRebuild : Bool
     , dependencies : List String
     , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
     , readme : Maybe String
@@ -89,6 +90,7 @@ type Msg
     | GotDiff (Maybe ApiDiff)
     | SpinnerTick
     | ToastTick
+    | RebuildCache
     | GotPackageDocs String (Result FatalError (List Docs.Module))
 
 
@@ -123,6 +125,7 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
       , cachedRightPane = Nothing
       , itemLinePositions = []
       , internalLinks = []
+      , pendingCacheRebuild = True
       , dependencies = dependencies
       , loadPackageDocs = loadPackageDocs
       , readme = readme
@@ -389,27 +392,35 @@ update msg model =
                         |> Layout.setSelectedIndex "items" 0
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
+                , pendingCacheRebuild = True
               }
-                |> refreshRightPaneCache
             , Effect.none
             )
 
         SelectItem idx ->
             let
-                -- Use precomputed positions — fast lookup
+                -- Ensure positions are available (rebuild cache if pending)
+                readyModel =
+                    if model.pendingCacheRebuild || List.isEmpty model.itemLinePositions then
+                        { model | pendingCacheRebuild = False }
+                            |> refreshRightPaneCache
+
+                    else
+                        model
+
                 scrollTarget =
-                    model.itemLinePositions
+                    readyModel.itemLinePositions
                         |> List.drop idx
                         |> List.head
                         |> Maybe.map Tuple.second
                         |> Maybe.withDefault 0
 
                 newLayout =
-                    model.layout
+                    readyModel.layout
                         |> Layout.resetScroll "docs"
                         |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
             in
-            ( { model | layout = newLayout }
+            ( { readyModel | layout = newLayout }
             , Effect.none
             )
 
@@ -419,7 +430,7 @@ update msg model =
                     Layout.withContext ctx model.layout
                 , cachedRightPane = Nothing
               }
-                |> refreshRightPaneCache
+                |> (\m -> { m | pendingCacheRebuild = True })
             , Effect.none
             )
 
@@ -454,7 +465,7 @@ update msg model =
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
               }
-                |> refreshRightPaneCache
+                |> (\m -> { m | pendingCacheRebuild = True })
             , Effect.none
             )
 
@@ -463,6 +474,12 @@ update msg model =
 
         ToastTick ->
             ( { model | toasts = Toast.tick model.toasts }, Effect.none )
+
+        RebuildCache ->
+            ( { model | pendingCacheRebuild = False }
+                |> (\m -> { m | pendingCacheRebuild = True })
+            , Effect.none
+            )
 
         GotPackageDocs packageName result ->
             case result of
@@ -480,7 +497,7 @@ update msg model =
                         , cachedRightPane = Nothing
                         , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
                       }
-                        |> refreshRightPaneCache
+                        |> (\m -> { m | pendingCacheRebuild = True })
                     , Effect.none
                     )
 
@@ -571,7 +588,7 @@ navigateToLink destination model =
                                 , cachedDocsContent = Nothing
                                 , cachedRightPane = Nothing
                             }
-                                |> refreshRightPaneCache
+                                |> (\m -> { m | pendingCacheRebuild = True })
 
                         finalModel =
                             case targetItem of
@@ -787,7 +804,7 @@ handleAction action model =
                                         DocsView
                         in
                         ( { model | rightView = newView, cachedRightPane = Nothing }
-                            |> refreshRightPaneCache
+                            |> (\m -> { m | pendingCacheRebuild = True })
                         , Effect.none
                         )
 
@@ -813,7 +830,7 @@ handleAction action model =
 
         SwitchToModulesTab ->
             ( { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
-                |> refreshRightPaneCache
+                |> (\m -> { m | pendingCacheRebuild = True })
             , Effect.none
             )
 
@@ -1590,18 +1607,27 @@ rightPaneCacheKey wrapWidth model =
 syncItemsToScroll : Model -> Model
 syncItemsToScroll model =
     let
-        scrollOffset =
-            Layout.scrollPosition "docs" model.layout
+        readyModel =
+            if model.pendingCacheRebuild then
+                { model | pendingCacheRebuild = False }
+                    |> refreshRightPaneCache
 
-        -- Select the last item whose line is at or above the top of the visible area
-        -- This means: as you scroll down past an item, it stays selected until the next item
-        -- reaches the top. As you scroll up, an item becomes selected as soon as it appears.
+            else
+                model
+    in
+    if List.isEmpty readyModel.itemLinePositions then
+        readyModel
+
+    else
+    let
+        scrollOffset =
+            Layout.scrollPosition "docs" readyModel.layout
+
         anchor =
             scrollOffset + 3
 
-        -- Use precomputed positions — just integer comparisons, no string scanning
         bestIndex =
-            model.itemLinePositions
+            readyModel.itemLinePositions
                 |> List.indexedMap Tuple.pair
                 |> List.foldl
                     (\( idx, ( _, linePos ) ) best ->
@@ -1613,7 +1639,7 @@ syncItemsToScroll model =
                     )
                     0
     in
-    { model | layout = Layout.setSelectedIndex "items" bestIndex model.layout }
+    { readyModel | layout = Layout.setSelectedIndex "items" bestIndex readyModel.layout }
 
 
 extractInternalLinks : List Tui.Screen -> List { line : Int, destination : String, text : String }
@@ -3267,6 +3293,12 @@ subscriptions model =
                )
             ++ (if Toast.hasToasts model.toasts then
                     [ Tui.Sub.every 100 ToastTick ]
+
+                else
+                    []
+               )
+            ++ (if model.pendingCacheRebuild then
+                    [ Tui.Sub.every 1 RebuildCache ]
 
                 else
                     []

@@ -2,7 +2,41 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
+import { performance } from "perf_hooks";
 import { computeDiff as computeDiffLib } from "../lib/compute-diff.js";
+
+const timers: Map<string, number> = new Map();
+
+/**
+ * Start a named timer. Returns null.
+ */
+export async function perfStart(
+  rawInput: unknown,
+  _context: unknown
+): Promise<null> {
+  const label = rawInput as string;
+  timers.set(label, performance.now());
+  return null;
+}
+
+/**
+ * End a named timer and log the elapsed time to stderr. Returns elapsed ms.
+ */
+export async function perfEnd(
+  rawInput: unknown,
+  _context: unknown
+): Promise<number> {
+  const label = rawInput as string;
+  const start = timers.get(label);
+  if (start !== undefined) {
+    const elapsed = performance.now() - start;
+    console.error(`[PERF] ${label}: ${elapsed.toFixed(1)}ms`);
+    timers.delete(label);
+    return elapsed;
+  }
+  console.error(`[PERF] ${label}: no start time found`);
+  return -1;
+}
 
 /**
  * Build docs.json for an Elm application by creating a temporary package project.
