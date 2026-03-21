@@ -1416,18 +1416,13 @@ renderStatusBar model width =
             , hyperlink = Nothing
             }
     in
-    -- Show filter status bar if filtering is active on any pane
-    case Layout.filterStatusBar "modules" model.layout of
+    -- Show filter/search status bar if active on any pane
+    case Layout.activeFilterStatusBar model.layout of
         Just filterBar ->
             filterBar
 
         Nothing ->
-            case Layout.filterStatusBar "items" model.layout of
-                Just filterBar ->
-                    filterBar
-
-                Nothing ->
-                    Tui.styled barStyle (hintText ++ String.repeat padding " ")
+            Tui.styled barStyle (hintText ++ String.repeat padding " ")
 
 
 modulesPaneWidth : Int -> Layout.Width
@@ -2317,7 +2312,9 @@ rightPane ctx model =
             { title = cached.title
             , width = Layout.fill
             }
-            (Layout.content cached.lines)
+            (Layout.content cached.lines
+                |> Layout.withSearchable
+            )
             |> withScrollPercentFooter model cached.lines
 
 
