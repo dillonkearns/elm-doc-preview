@@ -12,6 +12,7 @@ module Docs.Render exposing
     , renderTocWithDiff
     , renderUnion
     , renderValue
+    , typeToLines
     , typeToString
     )
 
