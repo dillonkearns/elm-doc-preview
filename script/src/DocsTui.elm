@@ -392,35 +392,26 @@ update msg model =
                         |> Layout.setSelectedIndex "items" 0
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
-                , pendingCacheRebuild = True
               }
+                |> refreshRightPaneCache
             , Effect.none
             )
 
         SelectItem idx ->
             let
-                -- Ensure positions are available (rebuild cache if pending)
-                readyModel =
-                    if model.pendingCacheRebuild || List.isEmpty model.itemLinePositions then
-                        { model | pendingCacheRebuild = False }
-                            |> refreshRightPaneCache
-
-                    else
-                        model
-
                 scrollTarget =
-                    readyModel.itemLinePositions
+                    model.itemLinePositions
                         |> List.drop idx
                         |> List.head
                         |> Maybe.map Tuple.second
                         |> Maybe.withDefault 0
 
                 newLayout =
-                    readyModel.layout
+                    model.layout
                         |> Layout.resetScroll "docs"
                         |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
             in
-            ( { readyModel | layout = newLayout }
+            ( { model | layout = newLayout }
             , Effect.none
             )
 
@@ -430,7 +421,7 @@ update msg model =
                     Layout.withContext ctx model.layout
                 , cachedRightPane = Nothing
               }
-                |> (\m -> { m | pendingCacheRebuild = True })
+                |> refreshRightPaneCache
             , Effect.none
             )
 
@@ -465,7 +456,7 @@ update msg model =
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
               }
-                |> (\m -> { m | pendingCacheRebuild = True })
+                |> refreshRightPaneCache
             , Effect.none
             )
 
@@ -477,7 +468,7 @@ update msg model =
 
         RebuildCache ->
             ( { model | pendingCacheRebuild = False }
-                |> (\m -> { m | pendingCacheRebuild = True })
+                |> refreshRightPaneCache
             , Effect.none
             )
 
@@ -497,7 +488,7 @@ update msg model =
                         , cachedRightPane = Nothing
                         , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
                       }
-                        |> (\m -> { m | pendingCacheRebuild = True })
+                        |> refreshRightPaneCache
                     , Effect.none
                     )
 
@@ -588,7 +579,7 @@ navigateToLink destination model =
                                 , cachedDocsContent = Nothing
                                 , cachedRightPane = Nothing
                             }
-                                |> (\m -> { m | pendingCacheRebuild = True })
+                                |> refreshRightPaneCache
 
                         finalModel =
                             case targetItem of
@@ -804,7 +795,7 @@ handleAction action model =
                                         DocsView
                         in
                         ( { model | rightView = newView, cachedRightPane = Nothing }
-                            |> (\m -> { m | pendingCacheRebuild = True })
+                            |> refreshRightPaneCache
                         , Effect.none
                         )
 
@@ -830,7 +821,7 @@ handleAction action model =
 
         SwitchToModulesTab ->
             ( { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
-                |> (\m -> { m | pendingCacheRebuild = True })
+                |> refreshRightPaneCache
             , Effect.none
             )
 
@@ -1091,9 +1082,36 @@ handleAction action model =
                 visibleBottom =
                     scrollOffset + ctx.height - 4
 
-                -- Find the first internal link in the visible area
+                -- Extract links lazily (only when user presses Enter)
+                links =
+                    case selectedModule model of
+                        Just mod ->
+                            let
+                                rawLinks =
+                                    extractLinksFromComment mod.comment
+
+                                docsContent =
+                                    currentDocsContent model
+                            in
+                            rawLinks
+                                |> List.filterMap
+                                    (\link ->
+                                        let
+                                            linePos =
+                                                findLinkLine link.text docsContent
+                                        in
+                                        if linePos >= 0 then
+                                            Just { line = linePos, destination = link.destination, text = link.text }
+
+                                        else
+                                            Nothing
+                                    )
+
+                        Nothing ->
+                            []
+
                 visibleLink =
-                    model.internalLinks
+                    links
                         |> List.filter (\link -> link.line >= visibleTop && link.line <= visibleBottom)
                         |> List.head
             in
@@ -1606,28 +1624,19 @@ rightPaneCacheKey wrapWidth model =
 
 syncItemsToScroll : Model -> Model
 syncItemsToScroll model =
-    let
-        readyModel =
-            if model.pendingCacheRebuild then
-                { model | pendingCacheRebuild = False }
-                    |> refreshRightPaneCache
-
-            else
-                model
-    in
-    if List.isEmpty readyModel.itemLinePositions then
-        readyModel
+    if List.isEmpty model.itemLinePositions then
+        model
 
     else
     let
         scrollOffset =
-            Layout.scrollPosition "docs" readyModel.layout
+            Layout.scrollPosition "docs" model.layout
 
         anchor =
             scrollOffset + 3
 
         bestIndex =
-            readyModel.itemLinePositions
+            model.itemLinePositions
                 |> List.indexedMap Tuple.pair
                 |> List.foldl
                     (\( idx, ( _, linePos ) ) best ->
@@ -1639,7 +1648,7 @@ syncItemsToScroll model =
                     )
                     0
     in
-    { readyModel | layout = Layout.setSelectedIndex "items" bestIndex readyModel.layout }
+    { model | layout = Layout.setSelectedIndex "items" bestIndex model.layout }
 
 
 extractInternalLinks : List Tui.Screen -> List { line : Int, destination : String, text : String }
@@ -1698,6 +1707,11 @@ extractLinksFromComment comment =
             )
 
 
+refreshRightPaneCacheDeferred : Model -> Model
+refreshRightPaneCacheDeferred model =
+    { model | pendingCacheRebuild = True }
+
+
 refreshRightPaneCache : Model -> Model
 refreshRightPaneCache model =
     let
@@ -1723,38 +1737,12 @@ refreshRightPaneCache model =
                     findAllItemLines items cache.lines
             in
             let
-                -- Extract internal links from the selected module/entry's comment
+                -- Skip expensive link extraction during cache rebuild
+                -- Links are extracted lazily when FollowLink is triggered
                 links =
                     case selectedEntry m of
                         Just (Leaf { name }) ->
-                            case findModule name m.modules of
-                                Just mod ->
-                                    let
-                                        allComments =
-                                            mod.comment
-                                                ++ String.concat (List.map .comment mod.values)
-                                                ++ String.concat (List.map .comment mod.unions)
-                                                ++ String.concat (List.map .comment mod.aliases)
-
-                                        rawLinks =
-                                            extractLinksFromComment allComments
-                                    in
-                                    rawLinks
-                                        |> List.filterMap
-                                            (\link ->
-                                                let
-                                                    linePos =
-                                                        findLinkLine link.text cache.lines
-                                                in
-                                                if linePos >= 0 then
-                                                    Just { line = linePos, destination = link.destination, text = link.text }
-
-                                                else
-                                                    Nothing
-                                            )
-
-                                Nothing ->
-                                    []
+                            []
 
                         _ ->
                             []
