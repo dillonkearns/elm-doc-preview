@@ -1416,7 +1416,18 @@ renderStatusBar model width =
             , hyperlink = Nothing
             }
     in
-    Tui.styled barStyle (hintText ++ String.repeat padding " ")
+    -- Show filter status bar if filtering is active on any pane
+    case Layout.filterStatusBar "modules" model.layout of
+        Just filterBar ->
+            filterBar
+
+        Nothing ->
+            case Layout.filterStatusBar "items" model.layout of
+                Just filterBar ->
+                    filterBar
+
+                Nothing ->
+                    Tui.styled barStyle (hintText ++ String.repeat padding " ")
 
 
 modulesPaneWidth : Int -> Layout.Width
@@ -1454,6 +1465,7 @@ modulesPane ctx model =
                     , default = \entry -> renderTreeEntryDefault showBadges model entry
                     }
                     entries
+                    |> Layout.withFilterable ModuleTree.entryName entries
                 )
 
     in
@@ -1558,6 +1570,7 @@ itemsPane model =
                         Tui.text name
             }
             items
+            |> Layout.withFilterable identity items
         )
         |> Layout.withFooter
             (if itemCount > 0 then
