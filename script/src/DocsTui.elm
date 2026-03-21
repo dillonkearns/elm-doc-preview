@@ -2455,7 +2455,7 @@ renderModuleDocsWithPositions wrapWidth mod =
                         newPositions =
                             case block of
                                 Docs.MarkdownBlock markdown ->
-                                    -- Markdown blocks can have multiple headings
+                                    -- Find each heading's actual line within the rendered block
                                     let
                                         headings =
                                             extractHeadings markdown
@@ -2465,11 +2465,30 @@ renderModuleDocsWithPositions wrapWidth mod =
                                             acc.positions
 
                                         _ ->
-                                            -- For multiple headings in one block, first heading gets this block's position
-                                            -- (we can't easily split a single MarkdownBlock's rendered lines by heading)
                                             List.foldl
                                                 (\heading posAcc ->
-                                                    posAcc ++ [ ( heading, acc.lineCount ) ]
+                                                    let
+                                                        -- Search rendered block lines for this heading's text
+                                                        headingText =
+                                                            String.dropLeft 2 heading
+
+                                                        lineOffset =
+                                                            blockLines
+                                                                |> List.indexedMap Tuple.pair
+                                                                |> List.filter
+                                                                    (\( _, line ) ->
+                                                                        let
+                                                                            text =
+                                                                                Tui.toString line
+                                                                        in
+                                                                        String.contains headingText text
+                                                                            && String.contains "##" text
+                                                                    )
+                                                                |> List.head
+                                                                |> Maybe.map Tuple.first
+                                                                |> Maybe.withDefault 0
+                                                    in
+                                                    posAcc ++ [ ( heading, acc.lineCount + lineOffset ) ]
                                                 )
                                                 acc.positions
                                                 headings
