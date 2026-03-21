@@ -59,7 +59,7 @@ type alias Model =
     , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
     , itemLinePositions : List ( String, Int )
     , internalLinks : List { line : Int, destination : String, text : String }
-    , pendingCacheRebuild : Bool
+    , preRenderedModules : Dict.Dict String { lines : List Tui.Screen, items : List String, itemPositions : List ( String, Int ) }
     , dependencies : List String
     , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
     , readme : Maybe String
@@ -90,7 +90,6 @@ type Msg
     | GotDiff (Maybe ApiDiff)
     | SpinnerTick
     | ToastTick
-    | RebuildCache
     | GotPackageDocs String (Result FatalError (List Docs.Module))
 
 
@@ -125,7 +124,7 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
       , cachedRightPane = Nothing
       , itemLinePositions = []
       , internalLinks = []
-      , pendingCacheRebuild = True
+      , preRenderedModules = Dict.empty
       , dependencies = dependencies
       , loadPackageDocs = loadPackageDocs
       , readme = readme
@@ -466,12 +465,6 @@ update msg model =
         ToastTick ->
             ( { model | toasts = Toast.tick model.toasts }, Effect.none )
 
-        RebuildCache ->
-            ( { model | pendingCacheRebuild = False }
-                |> refreshRightPaneCache
-            , Effect.none
-            )
-
         GotPackageDocs packageName result ->
             case result of
                 Ok newModules ->
@@ -486,6 +479,7 @@ update msg model =
                         , readme = Nothing
                         , cachedDocsContent = Nothing
                         , cachedRightPane = Nothing
+                        , preRenderedModules = preRenderAllModules 100 newModules
                         , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
                       }
                         |> refreshRightPaneCache
@@ -1500,7 +1494,7 @@ modulesPane ctx model =
 
     in
     pane
-        |> Layout.withPrefix ("[" ++ String.fromInt entryCount ++ "] ")
+        -- Entry count shown in footer, not prefix (framework handles [1] tab number)
         |> Layout.withFooter
             (case model.filterInput of
                 Just input ->
@@ -1707,9 +1701,29 @@ extractLinksFromComment comment =
             )
 
 
-refreshRightPaneCacheDeferred : Model -> Model
-refreshRightPaneCacheDeferred model =
-    { model | pendingCacheRebuild = True }
+preRenderAllModules : Int -> List Docs.Module -> Dict.Dict String { lines : List Tui.Screen, items : List String, itemPositions : List ( String, Int ) }
+preRenderAllModules wrapWidth modules =
+    modules
+        |> List.map
+            (\mod ->
+                let
+                    lines =
+                        renderModuleDocs wrapWidth mod
+
+                    items =
+                        moduleItemNames mod
+
+                    positions =
+                        findAllItemLines items lines
+                in
+                ( mod.name
+                , { lines = lines
+                  , items = items
+                  , itemPositions = positions
+                  }
+                )
+            )
+        |> Dict.fromList
 
 
 refreshRightPaneCache : Model -> Model
@@ -1727,27 +1741,45 @@ refreshRightPaneCache model =
     let
         buildAndCachePositions m =
             let
-                cache =
-                    buildRightPaneCache wrapWidth m key
-
-                items =
-                    itemsForCurrentView m
-
-                positions =
-                    findAllItemLines items cache.lines
-            in
-            let
-                -- Skip expensive link extraction during cache rebuild
-                -- Links are extracted lazily when FollowLink is triggered
-                links =
+                -- Check if we have a pre-rendered version
+                selectedName =
                     case selectedEntry m of
                         Just (Leaf { name }) ->
-                            []
+                            name
 
                         _ ->
-                            []
+                            ""
+
+                preRendered =
+                    Dict.get selectedName m.preRenderedModules
             in
-            { m | cachedRightPane = Just cache, itemLinePositions = positions, internalLinks = links }
+            case preRendered of
+                Just rendered ->
+                    -- Use pre-rendered content (instant!)
+                    { m
+                        | cachedRightPane =
+                            Just
+                                { key = key
+                                , title = "Docs: " ++ selectedName
+                                , lines = rendered.lines
+                                }
+                        , itemLinePositions = rendered.itemPositions
+                        , internalLinks = []
+                    }
+
+                Nothing ->
+                    -- Fall back to rendering on demand
+                    let
+                        cache =
+                            buildRightPaneCache wrapWidth m key
+
+                        items =
+                            itemsForCurrentView m
+
+                        positions =
+                            findAllItemLines items cache.lines
+                    in
+                    { m | cachedRightPane = Just cache, itemLinePositions = positions, internalLinks = [] }
     in
     case model.cachedRightPane of
         Just cached ->
@@ -3281,12 +3313,6 @@ subscriptions model =
                )
             ++ (if Toast.hasToasts model.toasts then
                     [ Tui.Sub.every 100 ToastTick ]
-
-                else
-                    []
-               )
-            ++ (if model.pendingCacheRebuild then
-                    [ Tui.Sub.every 1 RebuildCache ]
 
                 else
                     []
