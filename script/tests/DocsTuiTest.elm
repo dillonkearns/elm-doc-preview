@@ -118,14 +118,14 @@ suite =
             [ test "pressing 2 switches to Changes tab when diff present" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         -- Should show diff badges for changed modules
                         |> TuiTest.ensureViewHas " + "
                         |> TuiTest.expectRunning
             , test "pressing 1 switches back to Modules tab" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         |> TuiTest.pressKey '1'
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.expectRunning
@@ -155,14 +155,14 @@ suite =
             , test "pressing 2 without diff or versions does nothing" <|
                 \() ->
                     startBrowse sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.ensureViewDoesNotHave "Changes"
                         |> TuiTest.expectRunning
             , test "pressing 2 available when versions exist (no diff yet)" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         -- Should trigger diff loading
                         |> TuiTest.ensureViewHas "Loading"
                         |> TuiTest.resolveEffect
@@ -173,7 +173,7 @@ suite =
             , test "pressing 2 with versions triggers diff loading" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         |> TuiTest.ensureViewHas "Loading"
                         |> TuiTest.resolveEffect
                             (BackendTaskTest.simulateCustom "loadDiff"
@@ -184,14 +184,14 @@ suite =
             , test "Changes tab shows only changed modules" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         |> TuiTest.ensureViewHas "Json.Decode"
                         |> TuiTest.ensureViewHas "Http"
                         |> TuiTest.expectRunning
             , test "Changes tab shows diff badges" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         |> TuiTest.ensureViewHas " + "
                         |> TuiTest.expectRunning
             ]
@@ -366,8 +366,7 @@ suite =
             , test "in diff view, newly added module shows its items not another module's" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
-                        |> TuiTest.pressKey 'd'
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'c'
                         -- Changes tab: Http (added) is first entry, already selected
                         -- Items pane should show Http's "get", not Json.Decode's "decodeString"
                         |> TuiTest.ensureViewHas " + Http"
@@ -529,14 +528,14 @@ suite =
             [ test "pressing 3 switches to Versions tab" <|
                 \() ->
                     startWithVersions [ "12.1.0", "12.0.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.ensureViewHas "12.1.0"
                         |> TuiTest.ensureViewHas "12.0.0"
                         |> TuiTest.expectRunning
             , test "pressing 3 without versions does nothing" <|
                 \() ->
                     startBrowse sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.ensureViewDoesNotHave "Versions"
                         |> TuiTest.expectRunning
@@ -554,14 +553,14 @@ suite =
             , test "j/k navigates version list" <|
                 \() ->
                     startWithVersions [ "12.1.0", "12.0.0", "11.0.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.pressKey 'j'
                         |> TuiTest.ensureViewHas "2 of 3"
                         |> TuiTest.expectRunning
             , test "version ordering normalizes older → newer" <|
                 \() ->
                     startWithVersions [ "12.1.0", "12.0.0", "11.0.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         -- Select 12.1.0 (newest), press d, pick 11.0.0 (oldest)
                         |> TuiTest.pressKey 'd'
                         -- Picker should show other versions
@@ -570,7 +569,7 @@ suite =
             , test "d on version opens compare-against picker" <|
                 \() ->
                     startWithVersions [ "12.1.0", "12.0.0", "11.0.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         -- Select 12.1.0 (first version)
                         |> TuiTest.pressKey 'd'
                         -- Should open a picker showing other versions to compare against
@@ -584,7 +583,7 @@ suite =
             [ test "Enter on version shows Loading with spinner" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.pressKeyWith { key = Tui.Enter, modifiers = [] }
                         |> TuiTest.ensureViewHas "Loading"
                         |> TuiTest.ensureViewHas "|"
@@ -596,7 +595,7 @@ suite =
             , test "resolving diff effect shows diff view" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.pressKeyWith { key = Tui.Enter, modifiers = [] }
                         |> TuiTest.resolveEffect
                             (BackendTaskTest.simulateCustom "loadDiff"
@@ -607,7 +606,7 @@ suite =
             , test "diff pane title shows version" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.pressKeyWith { key = Tui.Enter, modifiers = [] }
                         |> TuiTest.resolveEffect
                             (BackendTaskTest.simulateCustom "loadDiff"
@@ -618,7 +617,7 @@ suite =
             , test "shows toast when diff finishes loading" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.pressKey '3'
+                        |> TuiTest.pressKey 'v'
                         |> TuiTest.pressKeyWith { key = Tui.Enter, modifiers = [] }
                         |> TuiTest.resolveEffect
                             (BackendTaskTest.simulateCustom "loadDiff"
@@ -680,14 +679,13 @@ suite =
             [ test "Changes tab shows README entry when readmeDiff exists" <|
                 \() ->
                     startWithDiff sampleDiffWithReadme sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'c'
                         |> TuiTest.ensureViewHas "README"
                         |> TuiTest.expectRunning
             , test "selecting README shows diff lines in right pane" <|
                 \() ->
                     startWithDiff sampleDiffWithReadme sampleModules
-                        |> TuiTest.pressKey 'd'
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'c'
                         |> TuiTest.ensureViewHas "README"
                         |> TuiTest.ensureViewHas "New intro line"
                         |> TuiTest.expectRunning
@@ -702,7 +700,7 @@ suite =
             , test "README does not appear in Changes tab when no readmeDiff" <|
                 \() ->
                     startWithDiff sampleDiff sampleModules
-                        |> TuiTest.pressKey '2'
+                        |> TuiTest.pressKey 'd'
                         |> TuiTest.ensureViewDoesNotHave "README"
                         |> TuiTest.expectRunning
             ]
@@ -1187,7 +1185,7 @@ diffMode : TuiTest.TuiTest DocsTui.Model DocsTui.Msg
 diffMode =
     startWithDiff sampleDiff treeModules
         |> TuiTest.pressKey 'd'
-        |> TuiTest.pressKey '2'
+        |> TuiTest.pressKey 'd'
         |> TuiTest.pressKey '1'
         |> TuiTest.pressKey 'd'
 
@@ -1195,7 +1193,7 @@ diffMode =
 versionsTab : TuiTest.TuiTest DocsTui.Model DocsTui.Msg
 versionsTab =
     startWithVersions [ "12.1.0", "12.0.0", "11.0.0" ] treeModules
-        |> TuiTest.pressKey '3'
+        |> TuiTest.pressKey 'v'
         |> TuiTest.pressKey 'j'
         |> TuiTest.pressKey 'j'
         |> TuiTest.pressKey '1'
@@ -1204,7 +1202,7 @@ versionsTab =
 loadDiffFromVersions : TuiTest.TuiTest DocsTui.Model DocsTui.Msg
 loadDiffFromVersions =
     startWithVersions [ "12.1.0" ] treeModules
-        |> TuiTest.pressKey '3'
+        |> TuiTest.pressKey 'v'
         |> TuiTest.pressKeyWith { key = Tui.Enter, modifiers = [] }
         |> TuiTest.resolveEffect
             (BackendTaskTest.simulateCustom "loadDiff"

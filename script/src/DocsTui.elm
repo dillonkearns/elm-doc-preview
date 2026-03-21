@@ -250,13 +250,16 @@ selectedModule model =
             Nothing
 
 
-update : Msg -> Model -> ( Model, Effect.Effect Msg )
-update msg model =
-    case msg of
-        KeyPressed event ->
+handleKeyPressed : Tui.KeyEvent -> Model -> ( Model, Effect.Effect Msg )
+handleKeyPressed event model =
+    -- Let the framework handle number keys for pane focus first
+    case Layout.handleKeyEvent event (viewLayout (Layout.contextOf model.layout) model) model.layout of
+        ( newLayout, True ) ->
+            ( { model | layout = newLayout }, Effect.none )
+
+        ( _, False ) ->
             case model.comparePicker of
                 Just { baseVersion, picker } ->
-                    -- Compare picker is open
                     case event.key of
                         Tui.Escape ->
                             ( { model | comparePicker = Nothing }, Effect.none )
@@ -265,8 +268,6 @@ update msg model =
                             case Tui.Picker.selected picker of
                                 Just targetVersion ->
                                     let
-                                        -- Normalize order: older version is always the base
-                                        -- HEAD is always "newer" than any version
                                         ( olderVersion, newerVersion ) =
                                             orderVersions baseVersion targetVersion
 
@@ -336,8 +337,6 @@ update msg model =
 
                                 Tui.Character c ->
                                     if c == ' ' then
-                                        -- Skip spaces: fuzzy match works without them
-                                        -- "jfmelmreview" matches "jfmengels/elm-review"
                                         ( model, Effect.none )
 
                                     else
@@ -364,6 +363,13 @@ update msg model =
 
                                         Nothing ->
                                             ( model, Effect.none )
+
+
+update : Msg -> Model -> ( Model, Effect.Effect Msg )
+update msg model =
+    case msg of
+        KeyPressed event ->
+            handleKeyPressed event model
 
         MouseEvent mouseEvent ->
             let
@@ -1180,14 +1186,14 @@ globalBindings model =
 
         changesTabBinding =
             if hasDiff || hasVersions then
-                [ Keybinding.binding (Tui.Character '2') "Changes tab" SwitchToChangesTab ]
+                [ Keybinding.binding (Tui.Character 'c') "Changes" SwitchToChangesTab ]
 
             else
                 []
 
         versionsTabBinding =
             if hasVersions then
-                [ Keybinding.binding (Tui.Character '3') "Versions tab" SwitchToVersionsTab ]
+                [ Keybinding.binding (Tui.Character 'v') "Versions" SwitchToVersionsTab ]
 
             else
                 []
