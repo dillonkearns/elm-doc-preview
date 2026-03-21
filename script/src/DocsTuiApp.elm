@@ -109,6 +109,7 @@ loadDocsWithOptionalDiff :
             , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
             , dependencies : List String
             , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+            , readme : Maybe String
             }
 loadDocsWithOptionalDiff options =
     Script.command "pwd" []
@@ -135,6 +136,7 @@ loadDocsInDir :
             , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
             , dependencies : List String
             , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+            , readme : Maybe String
             }
 loadDocsInDir options =
     readElmJson
@@ -157,10 +159,13 @@ loadDocsInDir options =
 
                                 depNames =
                                     List.map Tuple.first elmJson.directDeps
+
+                                readmeContent =
+                                    readOptionalFile "README.md"
                             in
-                            BackendTask.map2 Tuple.pair loadVersions loadAllPackageNames
+                            BackendTask.map3 (\v p r -> ( v, p, r )) loadVersions loadAllPackageNames readmeContent
                                 |> BackendTask.andThen
-                                    (\( versions, allPackages ) ->
+                                    (\( versions, allPackages, readmeResult ) ->
                                         let
                                             allPackageNames =
                                                 -- Deps first, then all others
@@ -179,6 +184,7 @@ loadDocsInDir options =
                                                     , loadDiff = loadDiffFn
                                                     , dependencies = allPackageNames
                                                     , loadPackageDocs = buildLoadPackageDocs
+                                                    , readme = readmeResult
                                                     }
 
                                             Just _ ->
@@ -196,8 +202,9 @@ loadDocsInDir options =
                                                             , diff = maybeDiff
                                                             , versions = versions
                                                             , loadDiff = loadDiffFn
-                                                            , dependencies = List.map Tuple.first elmJson.directDeps
+                                                            , dependencies = allPackageNames
                                                             , loadPackageDocs = buildLoadPackageDocs
+                                                            , readme = readmeResult
                                                             }
                                                         )
                                     )

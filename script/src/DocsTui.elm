@@ -60,6 +60,7 @@ type alias Model =
     , itemLinePositions : List ( String, Int )
     , dependencies : List String
     , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+    , readme : Maybe String
     , packagePicker : Maybe (Tui.Picker.State String)
     , comparePicker : Maybe { baseVersion : String, picker : Tui.Picker.State String }
     , browsingPackage : Maybe String
@@ -97,9 +98,10 @@ init :
     , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
     , dependencies : List String
     , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+    , readme : Maybe String
     }
     -> ( Model, Effect.Effect Msg )
-init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs } =
+init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme } =
     ( { layout =
             Layout.init
                 |> Layout.focusPane "modules"
@@ -121,6 +123,7 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs } =
       , itemLinePositions = []
       , dependencies = dependencies
       , loadPackageDocs = loadPackageDocs
+      , readme = readme
       , packagePicker = Nothing
       , comparePicker = Nothing
       , browsingPackage = Nothing
@@ -136,7 +139,16 @@ visibleEntries model =
         baseEntries =
             case model.activeLeftTab of
                 ModulesTab ->
-                    ModuleTree.visibleEntries model.moduleTree
+                    let
+                        readmeEntry =
+                            case model.readme of
+                                Just _ ->
+                                    [ Leaf { name = "README", depth = 0 } ]
+
+                                Nothing ->
+                                    []
+                    in
+                    readmeEntry ++ ModuleTree.visibleEntries model.moduleTree
 
                 ChangesTab ->
                     case model.diff of
@@ -160,10 +172,20 @@ visibleEntries model =
                 baseEntries
 
             else
+                let
+                    words =
+                        query
+                            |> String.words
+                            |> List.filter (not << String.isEmpty)
+                in
                 baseEntries
                     |> List.filter
                         (\entry ->
-                            FuzzyMatch.match query (ModuleTree.entryName entry)
+                            let
+                                name =
+                                    ModuleTree.entryName entry
+                            in
+                            List.all (\word -> FuzzyMatch.match word name) words
                         )
 
         Nothing ->
@@ -352,6 +374,7 @@ update msg model =
                 | layout =
                     model.layout
                         |> Layout.resetScroll "docs"
+                        |> Layout.setSelectedIndex "items" 0
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
               }
@@ -1423,11 +1446,25 @@ itemsForCurrentView model =
                     []
 
         DocsView ->
-            case selectedModule model of
-                Just mod ->
-                    moduleItemNames mod
+            case selectedEntry model of
+                Just (Leaf { name }) ->
+                    if name == "README" then
+                        case model.readme of
+                            Just readmeContent ->
+                                extractHeadings readmeContent
 
-                Nothing ->
+                            Nothing ->
+                                []
+
+                    else
+                        case selectedModule model of
+                            Just mod ->
+                                moduleItemNames mod
+
+                            Nothing ->
+                                []
+
+                _ ->
                     []
 
 
@@ -1573,18 +1610,35 @@ buildRightPaneCache wrapWidth model key =
         DocsView ->
             case selectedEntry model of
                 Just (Leaf { name }) ->
-                    case findModule name model.modules of
-                        Just mod ->
-                            { key = key
-                            , title = "Docs: " ++ name
-                            , lines = renderModuleDocs wrapWidth mod
-                            }
+                    if name == "README" then
+                        case model.readme of
+                            Just readmeContent ->
+                                { key = key
+                                , title = "README"
+                                , lines =
+                                    renderMarkdownToScreens readmeContent
+                                        |> wrapLines wrapWidth
+                                }
 
-                        Nothing ->
-                            { key = key
-                            , title = "Docs: " ++ name
-                            , lines = [ Tui.text ("Module " ++ name ++ " not found") ]
-                            }
+                            Nothing ->
+                                { key = key
+                                , title = "README"
+                                , lines = [ Tui.text "No README found" ]
+                                }
+
+                    else
+                        case findModule name model.modules of
+                            Just mod ->
+                                { key = key
+                                , title = "Docs: " ++ name
+                                , lines = renderModuleDocs wrapWidth mod
+                                }
+
+                            Nothing ->
+                                { key = key
+                                , title = "Docs: " ++ name
+                                , lines = [ Tui.text ("Module " ++ name ++ " not found") ]
+                                }
 
                 Just (Group { prefix }) ->
                     { key = key

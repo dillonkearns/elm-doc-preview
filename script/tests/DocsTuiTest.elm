@@ -377,6 +377,7 @@ suite =
                             , loadDiff = noopLoadDiff
                             , dependencies = []
                             , loadPackageDocs = \_ -> BackendTask.succeed []
+                            , readme = Nothing
                             }
                         , init = DocsTui.init
                         , update = DocsTui.update
@@ -408,6 +409,7 @@ suite =
                             , loadDiff = noopLoadDiff
                             , dependencies = []
                             , loadPackageDocs = \_ -> BackendTask.succeed []
+                            , readme = Nothing
                             }
                         , init = DocsTui.init
                         , update = DocsTui.update
@@ -434,6 +436,7 @@ suite =
                             , loadDiff = noopLoadDiff
                             , dependencies = []
                             , loadPackageDocs = \_ -> BackendTask.succeed []
+                            , readme = Nothing
                             }
                         , init = DocsTui.init
                         , update = DocsTui.update
@@ -792,6 +795,7 @@ startBrowse modules =
             , loadDiff = noopLoadDiff
             , dependencies = []
             , loadPackageDocs = \_ -> BackendTask.succeed []
+            , readme = Nothing
             }
         , init = DocsTui.init
         , update = DocsTui.update
@@ -810,6 +814,7 @@ startWithDiff diff modules =
             , loadDiff = noopLoadDiff
             , dependencies = []
             , loadPackageDocs = \_ -> BackendTask.succeed []
+            , readme = Nothing
             }
         , init = DocsTui.init
         , update = DocsTui.update
@@ -836,6 +841,7 @@ startWithVersions versions modules =
             , loadDiff = testLoadDiff
             , dependencies = []
             , loadPackageDocs = \_ -> BackendTask.succeed []
+            , readme = Nothing
             }
         , init = DocsTui.init
         , update = DocsTui.update
@@ -854,6 +860,7 @@ startWithDeps deps modules =
             , loadDiff = noopLoadDiff
             , dependencies = deps
             , loadPackageDocs = testLoadPackageDocs
+            , readme = Nothing
             }
         , init = DocsTui.init
         , update = DocsTui.update
