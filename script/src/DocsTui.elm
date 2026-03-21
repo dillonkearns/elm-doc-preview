@@ -794,7 +794,10 @@ handleAction action model =
         SwitchToChangesTab ->
             case model.diff of
                 Just _ ->
-                    ( { model | activeLeftTab = ChangesTab, rightView = DiffView }, Effect.none )
+                    ( { model | activeLeftTab = ChangesTab, rightView = DiffView, cachedRightPane = Nothing }
+                        |> refreshRightPaneCache
+                    , Effect.none
+                    )
 
                 Nothing ->
                     case model.versions of
@@ -2296,18 +2299,14 @@ rightPane ctx model =
             wrapWidth =
                 docsPaneWidth ctx - 2
 
-            -- Check if cache is fresh; if not, use it anyway but it'll be refreshed next update
+            -- Use cached content only — never rebuild in view (too expensive)
             cached =
                 case model.cachedRightPane of
                     Just c ->
-                        if c.key == rightPaneCacheKey wrapWidth model then
-                            c
-
-                        else
-                            buildRightPaneCache wrapWidth model (rightPaneCacheKey wrapWidth model)
+                        c
 
                     Nothing ->
-                        buildRightPaneCache wrapWidth model (rightPaneCacheKey wrapWidth model)
+                        { key = "", title = "Docs", lines = [ Tui.text "Loading..." ] }
         in
         Layout.pane "docs"
             { title = cached.title
@@ -2327,7 +2326,12 @@ cappedScrollDown model delta =
             Layout.contextOf model.layout
 
         contentLines =
-            List.length (currentDocsContent model)
+            case model.cachedRightPane of
+                Just cached ->
+                    List.length cached.lines
+
+                Nothing ->
+                    1000
 
         visibleHeight =
             ctx.height - 2
