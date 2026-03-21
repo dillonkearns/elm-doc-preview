@@ -1,4 +1,4 @@
-module DocsTuiApp exposing (run)
+module DocsTuiApp exposing (loadAllPackageNames, run)
 
 {-| Entry point for the unified documentation TUI.
 
@@ -688,22 +688,25 @@ loadAllPackageNames =
         |> BackendTask.andThen
             (\elmHome ->
                 let
-                    packagesDir =
-                        elmHome ++ "/0.19.1/packages"
+                    cachePath =
+                        elmHome ++ "/0.19.1/packages/http-cache"
                 in
-                Script.command "sh"
-                    [ "-c"
-                    , "for author in " ++ packagesDir ++ "/*/; do for pkg in \"$author\"*/; do echo \"$(basename \"$author\")/$(basename \"$pkg\")\"; done; done 2>/dev/null || true"
-                    ]
-                    |> BackendTask.map
-                        (\output ->
-                            output
-                                |> String.trim
-                                |> String.lines
-                                |> List.filter (\s -> not (String.isEmpty s) && String.contains "/" s)
-                                |> List.sort
+                Script.command "mkdir" [ "-p", cachePath ]
+                    |> BackendTask.onError (\_ -> BackendTask.succeed "")
+                    |> BackendTask.andThen
+                        (\_ ->
+                            BackendTask.Http.getWithOptions
+                                { url = "https://package.elm-lang.org/search.json"
+                                , expect = BackendTask.Http.expectJson (Decode.list (Decode.field "name" Decode.string))
+                                , headers = []
+                                , cacheStrategy = Nothing
+                                , retries = Nothing
+                                , timeoutInMs = Nothing
+                                , cachePath = Just cachePath
+                                }
+                                |> BackendTask.allowFatal
+                                |> BackendTask.map List.sort
                         )
-                    |> BackendTask.onError (\_ -> BackendTask.succeed [])
             )
 
 

@@ -4,6 +4,7 @@ import BackendTask
 import BackendTask.Custom
 import Dict
 import DocsTui
+import DocsTuiApp
 import Pages.Script as Script
 import Docs.Diff as Diff exposing (ApiDiff)
 import Elm.Docs as Docs
@@ -521,6 +522,18 @@ suite =
                         |> TuiTest.pressKey 'j'
                         |> TuiTest.ensureViewHas "2 of 3"
                         |> TuiTest.expectRunning
+            , test "d on version opens compare-against picker" <|
+                \() ->
+                    startWithVersions [ "12.1.0", "12.0.0", "11.0.0" ] sampleModules
+                        |> TuiTest.pressKey '3'
+                        -- Select 12.1.0 (first version)
+                        |> TuiTest.pressKey 'd'
+                        -- Should open a picker showing other versions to compare against
+                        |> TuiTest.ensureViewHas "Compare 12.1.0"
+                        |> TuiTest.ensureViewHas "HEAD"
+                        |> TuiTest.ensureViewHas "12.0.0"
+                        |> TuiTest.ensureViewHas "11.0.0"
+                        |> TuiTest.expectRunning
             ]
         , describe "on-demand diff loading"
             [ test "Enter on version shows Loading with spinner" <|
@@ -649,6 +662,14 @@ suite =
                         |> TuiTest.ensureViewHas "elm/json"
                         |> TuiTest.ensureViewHas "elm/http"
                         |> TuiTest.expectRunning
+            , test "p shows all registry packages in picker" <|
+                \() ->
+                    startWithDeps [ "elm/json", "elm/http", "dillonkearns/elm-pages", "mdgriffith/elm-ui" ] sampleModules
+                        |> TuiTest.pressKey 'p'
+                        |> TuiTest.ensureViewHas "Browse Package"
+                        |> TuiTest.ensureViewHas "dillonkearns/elm-pages"
+                        |> TuiTest.ensureViewHas "mdgriffith/elm-ui"
+                        |> TuiTest.expectRunning
             , test "Escape closes package picker" <|
                 \() ->
                     startWithDeps [ "elm/json" ] sampleModules
@@ -662,6 +683,57 @@ suite =
                         |> TuiTest.pressKey 'p'
                         |> TuiTest.ensureViewDoesNotHave "Browse Package"
                         |> TuiTest.expectRunning
+            ]
+        , describe "loadAllPackageNames"
+            [ test "fetches package names from search.json" <|
+                \() ->
+                    DocsTuiApp.loadAllPackageNames
+                        |> BackendTaskTest.fromBackendTaskWith
+                            (BackendTaskTest.init
+                                |> BackendTaskTest.withEnv "HOME" "/Users/test"
+                            )
+                        |> BackendTaskTest.simulateCommand "mkdir" ""
+                        |> BackendTaskTest.simulateHttpGet
+                            "https://package.elm-lang.org/search.json"
+                            (Encode.list
+                                (\( name, summary ) ->
+                                    Encode.object
+                                        [ ( "name", Encode.string name )
+                                        , ( "summary", Encode.string summary )
+                                        , ( "license", Encode.string "BSD-3-Clause" )
+                                        , ( "version", Encode.string "1.0.0" )
+                                        ]
+                                )
+                                [ ( "elm/core", "Elm core libraries" )
+                                , ( "elm/json", "Encode and decode JSON" )
+                                , ( "elm/http", "Make HTTP requests" )
+                                ]
+                            )
+                        |> BackendTaskTest.expectSuccessWith
+                            (Expect.equal [ "elm/core", "elm/http", "elm/json" ])
+            , test "returns sorted package names" <|
+                \() ->
+                    DocsTuiApp.loadAllPackageNames
+                        |> BackendTaskTest.fromBackendTaskWith
+                            (BackendTaskTest.init
+                                |> BackendTaskTest.withEnv "HOME" "/Users/test"
+                            )
+                        |> BackendTaskTest.simulateCommand "mkdir" ""
+                        |> BackendTaskTest.simulateHttpGet
+                            "https://package.elm-lang.org/search.json"
+                            (Encode.list
+                                (\name ->
+                                    Encode.object
+                                        [ ( "name", Encode.string name )
+                                        , ( "summary", Encode.string "" )
+                                        , ( "license", Encode.string "MIT" )
+                                        , ( "version", Encode.string "1.0.0" )
+                                        ]
+                                )
+                                [ "mdgriffith/elm-ui", "elm/core", "dillonkearns/elm-pages" ]
+                            )
+                        |> BackendTaskTest.expectSuccessWith
+                            (Expect.equal [ "dillonkearns/elm-pages", "elm/core", "mdgriffith/elm-ui" ])
             ]
         ]
 

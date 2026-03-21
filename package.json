@@ -66,7 +66,9 @@
   },
   "scripts": {
     "build": "make",
-    "install:global": "npm run build && npm i -g .",
+    "build:tui": "cd script && npx elm-pages bundle-script src/DocsTuiApp.elm --output ../lib/elm-docs-tui.mjs",
+    "install:global": "npm run build:tui && npm i -g .",
+    "test:tui": "cd script && npx elm-test",
     "prepublishOnly": "make",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
