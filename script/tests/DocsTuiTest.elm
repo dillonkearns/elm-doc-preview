@@ -119,7 +119,8 @@ suite =
                 \() ->
                     startWithDiff sampleDiff sampleModules
                         |> TuiTest.pressKey '2'
-                        |> TuiTest.ensureViewHas "Changes"
+                        -- Should show diff badges for changed modules
+                        |> TuiTest.ensureViewHas " + "
                         |> TuiTest.expectRunning
             , test "pressing 1 switches back to Modules tab" <|
                 \() ->
@@ -158,10 +159,16 @@ suite =
                         |> TuiTest.ensureViewHas "Modules"
                         |> TuiTest.ensureViewDoesNotHave "Changes"
                         |> TuiTest.expectRunning
-            , test "Changes tab visible when versions available (no diff yet)" <|
+            , test "pressing 2 available when versions exist (no diff yet)" <|
                 \() ->
                     startWithVersions [ "12.1.0" ] sampleModules
-                        |> TuiTest.ensureViewHas "Changes"
+                        |> TuiTest.pressKey '2'
+                        -- Should trigger diff loading
+                        |> TuiTest.ensureViewHas "Loading"
+                        |> TuiTest.resolveEffect
+                            (BackendTaskTest.simulateCustom "loadDiff"
+                                (encodeApiDiff sampleDiff)
+                            )
                         |> TuiTest.expectRunning
             , test "pressing 2 with versions triggers diff loading" <|
                 \() ->

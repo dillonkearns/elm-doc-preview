@@ -1433,89 +1433,7 @@ modulesPaneWidth termWidth =
 
 leftPaneTitle : Model -> String
 leftPaneTitle model =
-    let
-        hasDiff =
-            model.diff /= Nothing
-
-        hasVersions =
-            not (List.isEmpty model.versions)
-
-        showChanges =
-            hasDiff || hasVersions
-    in
-    case ( showChanges, hasVersions ) of
-        ( True, True ) ->
-            "[1]Modules [2]Changes [3]Versions"
-
-        ( True, False ) ->
-            "[1]Modules [2]Changes"
-
-        ( False, True ) ->
-            "[1]Modules [3]Versions"
-
-        ( False, False ) ->
-            "Modules"
-
-
-leftPaneTitleScreen : Model -> Maybe Tui.Screen
-leftPaneTitleScreen model =
-    let
-        hasDiff =
-            model.diff /= Nothing
-
-        hasVersions =
-            not (List.isEmpty model.versions)
-
-        tab : String -> String -> LeftTab -> Tui.Screen
-        tab number label tabType =
-            if model.activeLeftTab == tabType then
-                Tui.concat
-                    [ Tui.text number |> Tui.bold |> Tui.fg Ansi.Color.cyan
-                    , Tui.text label |> Tui.bold
-                    ]
-
-            else
-                Tui.text (number ++ label) |> Tui.dim
-
-        separator =
-            Tui.text " "
-    in
-    let
-        showChanges =
-            hasDiff || hasVersions
-    in
-    case ( showChanges, hasVersions ) of
-        ( True, True ) ->
-            Just
-                (Tui.concat
-                    [ tab "[1]" "Modules" ModulesTab
-                    , separator
-                    , tab "[2]" "Changes" ChangesTab
-                    , separator
-                    , tab "[3]" "Versions" VersionsTab
-                    ]
-                )
-
-        ( True, False ) ->
-            Just
-                (Tui.concat
-                    [ tab "[1]" "Modules" ModulesTab
-                    , separator
-                    , tab "[2]" "Changes" ChangesTab
-                    ]
-                )
-
-        ( False, True ) ->
-            Just
-                (Tui.concat
-                    [ tab "[1]" "Modules" ModulesTab
-                    , separator
-                    , tab "[3]" "Versions" VersionsTab
-                    ]
-                )
-
-        ( False, False ) ->
-            Nothing
+    "Modules"
 
 
 modulesPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
@@ -1545,15 +1463,8 @@ modulesPane ctx model =
                     entries
                 )
 
-        styledPane =
-            case leftPaneTitleScreen model of
-                Just titleScreen ->
-                    pane |> Layout.withTitleScreen titleScreen
-
-                Nothing ->
-                    pane
     in
-    styledPane
+    pane
         |> Layout.withPrefix ("[" ++ String.fromInt entryCount ++ "] ")
         |> Layout.withFooter
             (case model.filterInput of
@@ -1783,11 +1694,7 @@ refreshRightPaneCache model =
                     itemsForCurrentView m
 
                 positions =
-                    items
-                        |> List.map
-                            (\itemName ->
-                                ( itemName, findLineForItem itemName cache.lines )
-                            )
+                    findAllItemLines items cache.lines
             in
             let
                 -- Extract internal links from the selected module/entry's comment
@@ -2050,6 +1957,40 @@ buildDocsContent model =
 
                 _ ->
                     []
+
+
+findAllItemLines : List String -> List Tui.Screen -> List ( String, Int )
+findAllItemLines items lines =
+    let
+        -- Build a set of items we're looking for (for quick membership check)
+        itemSet =
+            items
+
+        -- Pre-convert all lines to strings once
+        indexedTextLines =
+            lines
+                |> List.indexedMap (\idx line -> ( idx, Tui.toString line ))
+
+        -- For each item, find its line position
+        findItem itemName =
+            let
+                matchLine ( _, text ) =
+                    if String.startsWith "# " itemName then
+                        String.contains ("## " ++ String.dropLeft 2 itemName) text
+
+                    else
+                        String.contains ("┃ " ++ itemName ++ " :") text
+                            || String.contains ("┃ " ++ itemName ++ " =") text
+                            || String.contains ("┃ type " ++ itemName ++ " ") text
+                            || String.contains ("┃ type alias " ++ itemName ++ " ") text
+            in
+            indexedTextLines
+                |> List.filter matchLine
+                |> List.head
+                |> Maybe.map (\( idx, _ ) -> ( itemName, idx ))
+                |> Maybe.withDefault ( itemName, 0 )
+    in
+    List.map findItem itemSet
 
 
 findLineForItem : String -> List Tui.Screen -> Int
