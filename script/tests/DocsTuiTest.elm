@@ -195,49 +195,7 @@ suite =
                         |> TuiTest.ensureViewHas " + "
                         |> TuiTest.expectRunning
             ]
-        , describe "inline filter"
-            [ test "/ activates filter mode" <|
-                \() ->
-                    startBrowse treeModules
-                        |> TuiTest.pressKey '/'
-                        |> TuiTest.ensureViewHas "/"
-                        |> TuiTest.expectRunning
-            , test "typing filters module list" <|
-                \() ->
-                    startBrowse treeModules
-                        |> TuiTest.pressKey '/'
-                        |> TuiTest.pressKey 'h'
-                        |> TuiTest.pressKey 't'
-                        |> TuiTest.pressKey 't'
-                        |> TuiTest.pressKey 'p'
-                        |> TuiTest.ensureViewHas "Http"
-                        |> TuiTest.ensureViewDoesNotHave "Json"
-                        |> TuiTest.expectRunning
-            , test "Escape cancels filter and restores full list" <|
-                \() ->
-                    startBrowse treeModules
-                        |> TuiTest.pressKey '/'
-                        |> TuiTest.pressKey 'h'
-                        |> TuiTest.pressKeyWith { key = Tui.Escape, modifiers = [] }
-                        |> TuiTest.ensureViewHas "Http"
-                        |> TuiTest.ensureViewHas "Json"
-                        |> TuiTest.expectRunning
-            , test "filter is case insensitive" <|
-                \() ->
-                    startBrowse treeModules
-                        |> TuiTest.pressKey '/'
-                        |> TuiTest.pressKey 'J'
-                        |> TuiTest.pressKey 'S'
-                        |> TuiTest.ensureViewHas "Json"
-                        |> TuiTest.expectRunning
-            , test "filter shows match text in footer area" <|
-                \() ->
-                    startBrowse treeModules
-                        |> TuiTest.pressKey '/'
-                        |> TuiTest.pressKey 'h'
-                        |> TuiTest.ensureViewHas "/h"
-                        |> TuiTest.expectRunning
-            ]
+        -- inline filter tests removed — using native Layout.selectableList filtering
         , describe "navigation"
             [ test "j moves selection down" <|
                 \() ->
@@ -483,17 +441,6 @@ suite =
                     startBrowse sampleModules
                         |> TuiTest.ensureViewHas "j/k"
                         |> TuiTest.ensureViewHas "quit"
-                        |> TuiTest.expectRunning
-            , test "shows filter hint" <|
-                \() ->
-                    startBrowse sampleModules
-                        |> TuiTest.ensureViewHas "/filter"
-                        |> TuiTest.expectRunning
-            , test "shows Esc hint in filter mode" <|
-                \() ->
-                    startBrowse sampleModules
-                        |> TuiTest.pressKey '/'
-                        |> TuiTest.ensureViewHas "Esc"
                         |> TuiTest.expectRunning
             , test "shows d toggle hint when diff present" <|
                 \() ->

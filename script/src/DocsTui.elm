@@ -29,7 +29,7 @@ import ModuleTree exposing (TreeEntry(..))
 import SyntaxHighlight
 import Tui
 import Tui.Effect as Effect
-import Tui.Input as Input
+-- Tui.Input removed — using native selectableList filtering
 import Tui.Keybinding as Keybinding
 import Tui.Layout as Layout
 import Tui.Modal as Modal
@@ -48,7 +48,7 @@ type alias Model =
     , showHelp : Bool
     , moduleTree : ModuleTree.ModuleTree
     , activeLeftTab : LeftTab
-    , filterInput : Maybe Input.State
+    -- filterInput removed — using native Layout.selectableList filtering
     , versions : List String
     , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
     , loadingDiff : Bool
@@ -113,7 +113,7 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
       , showHelp = False
       , moduleTree = ModuleTree.build (List.map .name modules)
       , activeLeftTab = ModulesTab
-      , filterInput = Nothing
+      -- filterInput removed
       , versions = versions
       , loadDiff = loadDiff
       , loadingDiff = False
@@ -166,34 +166,7 @@ visibleEntries model =
                     model.versions
                         |> List.map (\v -> Leaf { name = v, depth = 0 })
     in
-    case model.filterInput of
-        Just input ->
-            let
-                query =
-                    String.toLower (Input.text input)
-            in
-            if String.isEmpty query then
-                baseEntries
-
-            else
-                let
-                    words =
-                        query
-                            |> String.words
-                            |> List.filter (not << String.isEmpty)
-                in
-                baseEntries
-                    |> List.filter
-                        (\entry ->
-                            let
-                                name =
-                                    ModuleTree.entryName entry
-                            in
-                            List.all (\word -> FuzzyMatch.match word name) words
-                        )
-
-        Nothing ->
-            baseEntries
+    baseEntries
 
 
 changedModuleEntries : ApiDiff -> List TreeEntry
@@ -346,23 +319,12 @@ handleKeyPressed event model =
                                     ( model, Effect.none )
 
                         Nothing ->
-                            case model.filterInput of
-                                Just input ->
-                                    if event.key == Tui.Escape then
-                                        ( { model | filterInput = Nothing }, Effect.none )
-
-                                    else
-                                        ( { model | filterInput = Just (Input.update event input) }
-                                        , Effect.none
-                                        )
+                            case Keybinding.dispatch (allBindings model) event of
+                                Just action ->
+                                    handleAction action model
 
                                 Nothing ->
-                                    case Keybinding.dispatch (allBindings model) event of
-                                        Just action ->
-                                            handleAction action model
-
-                                        Nothing ->
-                                            ( model, Effect.none )
+                                    ( model, Effect.none )
 
 
 update : Msg -> Model -> ( Model, Effect.Effect Msg )
@@ -915,10 +877,10 @@ handleAction action model =
                 ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
 
         ActivateFilter ->
-            ( { model | filterInput = Just (Input.init "") }, Effect.none )
+            ( model, Effect.none )
 
         CancelFilter ->
-            ( { model | filterInput = Nothing }, Effect.none )
+            ( model, Effect.none )
 
         SwitchToVersionsTab ->
             if List.isEmpty model.versions then
@@ -1255,7 +1217,6 @@ modulesBindings model =
         , Keybinding.binding (Tui.Character '<') "Page up" PageUp
             |> Keybinding.withAlternate Tui.PageUp
         , Keybinding.binding Tui.Enter "Select" enterAction
-        , Keybinding.binding (Tui.Character '/') "Filter" ActivateFilter
         ]
 
 
@@ -1406,14 +1367,9 @@ renderStatusBar : Model -> Int -> Tui.Screen
 renderStatusBar model width =
     let
         hints =
-            case model.filterInput of
-                Just _ ->
-                    [ "Esc cancel", "type to filter" ]
-
-                Nothing ->
                     let
                         base =
-                            [ "j/k navigate", "/filter", "? help", "q quit" ]
+                            [ "j/k navigate", "? help", "q quit" ]
 
                         hasDiff =
                             model.diff /= Nothing
@@ -1504,14 +1460,9 @@ modulesPane ctx model =
     pane
         -- Entry count shown in footer, not prefix (framework handles [1] tab number)
         |> Layout.withFooter
-            (case model.filterInput of
-                Just input ->
-                    "/" ++ Input.text input
-
-                Nothing ->
-                    String.fromInt (Layout.selectedIndex "modules" model.layout + 1)
-                        ++ " of "
-                        ++ String.fromInt entryCount
+            (String.fromInt (Layout.selectedIndex "modules" model.layout + 1)
+                ++ " of "
+                ++ String.fromInt entryCount
             )
 
 
