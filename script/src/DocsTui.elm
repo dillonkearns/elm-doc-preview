@@ -293,7 +293,11 @@ update msg model =
                             ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.backspace picker } }, Effect.none )
 
                         Tui.Character c ->
-                            ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.typeChar c picker } }, Effect.none )
+                            if c == ' ' then
+                                ( model, Effect.none )
+
+                            else
+                                ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.typeChar c picker } }, Effect.none )
 
                         _ ->
                             ( model, Effect.none )
@@ -329,7 +333,13 @@ update msg model =
                                     ( { model | packagePicker = Just (Tui.Picker.backspace picker) }, Effect.none )
 
                                 Tui.Character c ->
-                                    ( { model | packagePicker = Just (Tui.Picker.typeChar c picker) }, Effect.none )
+                                    if c == ' ' then
+                                        -- Skip spaces: fuzzy match works without them
+                                        -- "jfmelmreview" matches "jfmengels/elm-review"
+                                        ( model, Effect.none )
+
+                                    else
+                                        ( { model | packagePicker = Just (Tui.Picker.typeChar c picker) }, Effect.none )
 
                                 _ ->
                                     ( model, Effect.none )
@@ -2568,16 +2578,33 @@ renderDocComment wrapWidth comment =
         trimmed =
             String.trim comment
 
-        -- Account for indent (4) + gutter (2) when wrapping
         commentWidth =
             wrapWidth - 6
+
+        needsMarkdown =
+            String.contains "`" trimmed
+                || String.contains "[" trimmed
+                || String.contains "#" trimmed
+                || String.contains "*" trimmed
+                || String.contains "    " trimmed
+                || String.contains "- " trimmed
     in
     if String.isEmpty trimmed then
         []
 
-    else
+    else if needsMarkdown then
         Tui.text ""
             :: (renderMarkdownToScreens trimmed
+                    |> wrapLines commentWidth
+               )
+            |> List.map (indentScreen "    ")
+
+    else
+        -- Fast path: plain text, no markdown parsing needed
+        Tui.text ""
+            :: (trimmed
+                    |> String.lines
+                    |> List.map Tui.text
                     |> wrapLines commentWidth
                )
             |> List.map (indentScreen "    ")

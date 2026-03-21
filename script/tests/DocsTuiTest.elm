@@ -723,6 +723,21 @@ suite =
                         |> TuiTest.pressKeyWith { key = Tui.Escape, modifiers = [] }
                         |> TuiTest.ensureViewDoesNotHave "Browse Package"
                         |> TuiTest.expectRunning
+            , test "space in picker search matches across word boundaries" <|
+                \() ->
+                    startWithDeps [ "jfmengels/elm-review", "elm/json", "elm/http" ] sampleModules
+                        |> TuiTest.pressKey 'p'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'f'
+                        |> TuiTest.pressKey 'm'
+                        |> TuiTest.pressKey ' '
+                        |> TuiTest.pressKey 'e'
+                        |> TuiTest.pressKey 'l'
+                        |> TuiTest.pressKey 'm'
+                        |> TuiTest.pressKey '-'
+                        |> TuiTest.pressKey 'r'
+                        |> TuiTest.ensureViewHas "jfmengels/elm-review"
+                        |> TuiTest.expectRunning
             , test "p without dependencies does nothing" <|
                 \() ->
                     startBrowse sampleModules
