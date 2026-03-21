@@ -479,7 +479,10 @@ update msg model =
                         , readme = Nothing
                         , cachedDocsContent = Nothing
                         , cachedRightPane = Nothing
-                        , preRenderedModules = preRenderAllModules 100 newModules
+                        , preRenderedModules =
+                            preRenderAllModules
+                                (docsPaneWidth (Layout.contextOf model.layout) - 2)
+                                newModules
                         , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
                       }
                         |> refreshRightPaneCache
@@ -1202,7 +1205,6 @@ globalBindings model =
              |> Keybinding.withAlternate (Tui.Arrow Tui.Left)
          , Keybinding.binding (Tui.Character 'l') "Focus right" FocusRight
              |> Keybinding.withAlternate (Tui.Arrow Tui.Right)
-         , Keybinding.binding (Tui.Character '1') "Modules tab" SwitchToModulesTab
          ]
             ++ diffToggleBinding
             ++ changesTabBinding
@@ -2029,6 +2031,8 @@ findAllItemLines items lines =
                             || String.contains ("┃ " ++ itemName ++ " =") text
                             || String.contains ("┃ type " ++ itemName ++ " ") text
                             || String.contains ("┃ type alias " ++ itemName ++ " ") text
+                            || String.endsWith ("┃ type " ++ itemName) text
+                            || String.endsWith ("┃ type alias " ++ itemName) text
             in
             indexedTextLines
                 |> List.filter matchLine
@@ -2060,6 +2064,8 @@ findLineForItem itemName lines =
                         || String.contains ("┃ " ++ itemName ++ " =") text
                         || String.contains ("┃ type " ++ itemName ++ " ") text
                         || String.contains ("┃ type alias " ++ itemName ++ " ") text
+                        || String.endsWith ("┃ type " ++ itemName) text
+                        || String.endsWith ("┃ type alias " ++ itemName) text
             )
         |> List.head
         |> Maybe.map Tuple.first
