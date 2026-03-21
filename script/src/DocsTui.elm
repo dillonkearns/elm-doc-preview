@@ -463,6 +463,7 @@ update msg model =
                         , rightView = DocsView
                         , diff = Nothing
                         , activeLeftTab = ModulesTab
+                        , readme = Nothing
                         , cachedDocsContent = Nothing
                         , cachedRightPane = Nothing
                         , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
