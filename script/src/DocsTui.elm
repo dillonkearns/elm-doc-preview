@@ -225,13 +225,8 @@ selectedModule model =
 
 handleKeyPressed : Tui.KeyEvent -> Model -> ( Model, Effect.Effect Msg )
 handleKeyPressed event model =
-    -- Let the framework handle number keys for pane focus first
-    case Layout.handleKeyEvent event (viewLayout (Layout.contextOf model.layout) model) model.layout of
-        ( newLayout, True ) ->
-            ( { model | layout = newLayout }, Effect.none )
-
-        ( _, False ) ->
-            case model.comparePicker of
+    -- Pickers get first priority — all keys go to them
+    case model.comparePicker of
                 Just { baseVersion, picker } ->
                     case event.key of
                         Tui.Escape ->
@@ -319,12 +314,18 @@ handleKeyPressed event model =
                                     ( model, Effect.none )
 
                         Nothing ->
-                            case Keybinding.dispatch (allBindings model) event of
-                                Just action ->
-                                    handleAction action model
+                            -- Let the framework handle number keys, /, search etc.
+                            case Layout.handleKeyEvent event (viewLayout (Layout.contextOf model.layout) model) model.layout of
+                                ( newLayout, True ) ->
+                                    ( { model | layout = newLayout }, Effect.none )
 
-                                Nothing ->
-                                    ( model, Effect.none )
+                                ( _, False ) ->
+                                    case Keybinding.dispatch (allBindings model) event of
+                                        Just action ->
+                                            handleAction action model
+
+                                        Nothing ->
+                                            ( model, Effect.none )
 
 
 update : Msg -> Model -> ( Model, Effect.Effect Msg )
