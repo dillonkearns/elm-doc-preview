@@ -2941,18 +2941,11 @@ tuiUnorderedList items =
                         CompletedTask ->
                             Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } "  [x] "
 
-                -- Each child block is List Tui.Screen. Flatten to get all lines.
-                childLines =
-                    List.concat children
+                -- Flatten all children into one line per item
+                childContent =
+                    flattenInlineChildren children
             in
-            case childLines of
-                [] ->
-                    [ bullet ]
-
-                first :: rest ->
-                    -- First line gets the bullet, rest are indented
-                    Tui.concat [ bullet, first ]
-                        :: List.map (\line -> Tui.concat [ Tui.text "    ", line ]) rest
+            [ Tui.concat [ bullet, childContent ] ]
         )
         items
 
