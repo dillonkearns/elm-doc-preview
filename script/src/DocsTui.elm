@@ -1679,19 +1679,16 @@ preRenderAllModules wrapWidth modules =
         |> List.map
             (\mod ->
                 let
-                    lines =
-                        renderModuleDocs wrapWidth mod
+                    rendered =
+                        renderModuleDocsWithPositions wrapWidth mod
 
                     items =
                         moduleItemNames mod
-
-                    positions =
-                        findAllItemLines items lines
                 in
                 ( mod.name
-                , { lines = lines
+                , { lines = rendered.lines
                   , items = items
-                  , itemPositions = positions
+                  , itemPositions = rendered.positions
                   }
                 )
             )
@@ -1742,16 +1739,42 @@ refreshRightPaneCache model =
                 Nothing ->
                     -- Fall back to rendering on demand
                     let
-                        cache =
-                            buildRightPaneCache wrapWidth m key
+                        fallbackName =
+                            case selectedEntry m of
+                                Just (Leaf { name }) ->
+                                    name
 
-                        items =
-                            itemsForCurrentView m
+                                _ ->
+                                    ""
 
-                        positions =
-                            findAllItemLines items cache.lines
+                        ( cacheEntry, positions ) =
+                            if m.rightView == DocsView && fallbackName /= "README" && fallbackName /= "" then
+                                case findModule fallbackName m.modules of
+                                    Just mod ->
+                                        let
+                                            rendered =
+                                                renderModuleDocsWithPositions wrapWidth mod
+                                        in
+                                        ( { key = key
+                                          , title = "Docs: " ++ fallbackName
+                                          , lines = rendered.lines
+                                          }
+                                        , rendered.positions
+                                        )
+
+                                    Nothing ->
+                                        ( buildRightPaneCache wrapWidth m key, [] )
+
+                            else
+                                ( buildRightPaneCache wrapWidth m key
+                                , findAllItemLines (itemsForCurrentView m) (buildRightPaneCache wrapWidth m key).lines
+                                )
                     in
-                    { m | cachedRightPane = Just cache, itemLinePositions = positions, internalLinks = [] }
+                    { m
+                        | cachedRightPane = Just cacheEntry
+                        , itemLinePositions = positions
+                        , internalLinks = []
+                    }
     in
     case model.cachedRightPane of
         Just cached ->
@@ -2371,6 +2394,105 @@ wrapLines maxWidth lines =
 renderModuleDocs : Int -> Docs.Module -> List Tui.Screen
 renderModuleDocs wrapWidth mod =
     renderModuleDocsWithGutter wrapWidth Ansi.Color.brightBlack mod
+
+
+{-| Render module docs and return both lines AND item positions.
+Positions are computed by counting lines during rendering — no string searching.
+-}
+renderModuleDocsWithPositions : Int -> Docs.Module -> { lines : List Tui.Screen, positions : List ( String, Int ) }
+renderModuleDocsWithPositions wrapWidth mod =
+    let
+        blocks =
+            Docs.toBlocks mod
+
+        separator =
+            [ Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing }
+                (String.repeat 40 "─")
+            , Tui.text ""
+            ]
+
+        -- Fold over blocks, accumulating lines and positions with running line count
+        result =
+            List.foldl
+                (\block acc ->
+                    let
+                        blockLines =
+                            renderBlock wrapWidth Ansi.Color.brightBlack block
+
+                        prefixLines =
+                            case block of
+                                Docs.MarkdownBlock _ ->
+                                    []
+
+                                _ ->
+                                    separator
+
+                        allBlockLines =
+                            prefixLines ++ blockLines ++ [ Tui.text "" ]
+
+                        blockStart =
+                            acc.lineCount + List.length prefixLines
+
+                        itemName =
+                            case block of
+                                Docs.ValueBlock v ->
+                                    Just v.name
+
+                                Docs.UnionBlock u ->
+                                    Just u.name
+
+                                Docs.AliasBlock a ->
+                                    Just a.name
+
+                                Docs.BinopBlock b ->
+                                    Just b.name
+
+                                Docs.MarkdownBlock markdown ->
+                                    extractHeadings markdown
+                                        |> List.head
+
+                                _ ->
+                                    Nothing
+
+                        newPositions =
+                            case block of
+                                Docs.MarkdownBlock markdown ->
+                                    -- Markdown blocks can have multiple headings
+                                    let
+                                        headings =
+                                            extractHeadings markdown
+                                    in
+                                    case headings of
+                                        [] ->
+                                            acc.positions
+
+                                        _ ->
+                                            -- For multiple headings in one block, first heading gets this block's position
+                                            -- (we can't easily split a single MarkdownBlock's rendered lines by heading)
+                                            List.foldl
+                                                (\heading posAcc ->
+                                                    posAcc ++ [ ( heading, acc.lineCount ) ]
+                                                )
+                                                acc.positions
+                                                headings
+
+                                _ ->
+                                    case itemName of
+                                        Just name ->
+                                            acc.positions ++ [ ( name, blockStart ) ]
+
+                                        Nothing ->
+                                            acc.positions
+                    in
+                    { lineCount = acc.lineCount + List.length allBlockLines
+                    , lines = acc.lines ++ allBlockLines
+                    , positions = newPositions
+                    }
+                )
+                { lineCount = 0, lines = [], positions = [] }
+                blocks
+    in
+    { lines = result.lines, positions = result.positions }
 
 
 renderModuleDocsWithGutter : Int -> Ansi.Color.Color -> Docs.Module -> List Tui.Screen
