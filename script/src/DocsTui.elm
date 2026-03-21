@@ -1992,9 +1992,15 @@ findAllItemLines items lines =
         -- For each item, find its line position
         findItem itemName =
             let
+                headingText =
+                    String.dropLeft 2 itemName
+
                 matchLine ( _, text ) =
                     if String.startsWith "# " itemName then
-                        String.contains ("## " ++ String.dropLeft 2 itemName) text
+                        -- Match heading: look for the heading text in rendered content
+                        -- Use the first significant words to avoid partial matches
+                        String.contains headingText text
+                            && String.contains "##" text
 
                     else
                         String.contains ("┃ " ++ itemName ++ " :") text
@@ -2024,8 +2030,9 @@ findLineForItem itemName lines =
                         Tui.toString line
                 in
                 if String.startsWith "# " itemName then
-                    -- Section heading: look for "## HeadingText" in rendered content
-                    String.contains ("## " ++ String.dropLeft 2 itemName) text
+                    -- Section heading: look for heading text in rendered content
+                    String.contains (String.dropLeft 2 itemName) text
+                        && String.contains "##" text
 
                 else
                     -- Match definitions: item name must appear right after the gutter
@@ -2076,11 +2083,54 @@ extractHeadings markdown =
         |> List.filterMap
             (\line ->
                 if String.startsWith "## " (String.trim line) then
-                    Just ("# " ++ String.trim (String.dropLeft 3 (String.trim line)))
+                    Just ("# " ++ stripMarkdownInline (String.trim (String.dropLeft 3 (String.trim line))))
 
                 else
                     Nothing
             )
+
+
+{-| Strip inline markdown formatting from text.
+Removes backticks, link syntax [text](url) → text, and bold/italic markers.
+-}
+stripMarkdownInline : String -> String
+stripMarkdownInline text =
+    text
+        |> stripLinks
+        |> String.replace "`" ""
+        |> String.replace "**" ""
+        |> String.replace "__" ""
+
+
+{-| Strip markdown link syntax: [text](url) → text
+-}
+stripLinks : String -> String
+stripLinks text =
+    case String.split "[" text of
+        [] ->
+            text
+
+        first :: rest ->
+            first
+                ++ String.join ""
+                    (List.map
+                        (\segment ->
+                            case String.split "](" segment of
+                                linkText :: urlParts :: _ ->
+                                    let
+                                        afterUrl =
+                                            urlParts
+                                                |> String.split ")"
+                                                |> List.drop 1
+                                                |> String.join ")"
+                                    in
+                                    linkText ++ afterUrl
+
+                                _ ->
+                                    "[" ++ segment
+                        )
+                        rest
+                    )
 
 
 renderTreeEntrySelected : Bool -> Model -> TreeEntry -> Tui.Screen
