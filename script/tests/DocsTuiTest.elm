@@ -398,6 +398,32 @@ suite =
                         -- Items pane should now show "2 of 2" (bar selected)
                         |> TuiTest.ensureViewHas "2 of 2"
                         |> TuiTest.expectRunning
+            , test "selecting item does not match type alias field with same name" <|
+                \() ->
+                    TuiTest.startWithContext { width = 100, height = 15, colorProfile = Tui.TrueColor }
+                        { data =
+                            { modules = [ radiusModule ]
+                            , diff = Nothing
+                            , versions = []
+                            , loadDiff = noopLoadDiff
+                            , dependencies = []
+                            , loadPackageDocs = \_ -> BackendTask.succeed []
+                            }
+                        , init = DocsTui.init
+                        , update = DocsTui.update
+                        , view = DocsTui.view
+                        , subscriptions = DocsTui.subscriptions
+                        }
+                        -- Focus items pane, navigate to "xs" (past RadiusScale, Radius, # Radius, none)
+                        |> TuiTest.pressKeyWith { key = Tui.Tab, modifiers = [] }
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        |> TuiTest.pressKey 'j'
+                        -- xs should be selected, docs should show "xs : Radius" definition
+                        -- NOT the "xs : Float" field inside RadiusScale
+                        |> TuiTest.ensureViewHas "Extra small radius"
+                        |> TuiTest.expectRunning
             , test "j in items pane scrolls docs to selected item" <|
                 \() ->
                     TuiTest.startWithContext { width = 120, height = 8, colorProfile = Tui.TrueColor }
@@ -521,6 +547,15 @@ suite =
                         |> TuiTest.pressKey '3'
                         |> TuiTest.pressKey 'j'
                         |> TuiTest.ensureViewHas "2 of 3"
+                        |> TuiTest.expectRunning
+            , test "version ordering normalizes older → newer" <|
+                \() ->
+                    startWithVersions [ "12.1.0", "12.0.0", "11.0.0" ] sampleModules
+                        |> TuiTest.pressKey '3'
+                        -- Select 12.1.0 (newest), press d, pick 11.0.0 (oldest)
+                        |> TuiTest.pressKey 'd'
+                        -- Picker should show other versions
+                        |> TuiTest.ensureViewHas "Compare 12.1.0"
                         |> TuiTest.expectRunning
             , test "d on version opens compare-against picker" <|
                 \() ->
@@ -919,6 +954,50 @@ sectionedModule =
           , comment = "An advanced function."
           , tipe = Type.Type "Int" []
           }
+        ]
+    , binops = []
+    }
+
+
+radiusModule : Docs.Module
+radiusModule =
+    { name = "W.Theme.Radius"
+    , comment = "Radius tokens.\n\n@docs RadiusScale, Radius\n\n## Radius\n\n@docs none, xs, sm, md, lg, xl, xl2, xl3, full, custom, toCSS"
+    , unions = []
+    , aliases =
+        [ { name = "RadiusScale"
+          , comment = "The default radius scale."
+          , args = []
+          , tipe =
+                Type.Record
+                    [ ( "xs", Type.Type "Float" [] )
+                    , ( "sm", Type.Type "Float" [] )
+                    , ( "md", Type.Type "Float" [] )
+                    , ( "lg", Type.Type "Float" [] )
+                    , ( "xl", Type.Type "Float" [] )
+                    , ( "xl2", Type.Type "Float" [] )
+                    , ( "xl3", Type.Type "Float" [] )
+                    ]
+                    Nothing
+          }
+        , { name = "Radius"
+          , comment = "An opaque radius type."
+          , args = []
+          , tipe = Type.Type "Float" []
+          }
+        ]
+    , values =
+        [ { name = "none", comment = "No radius.", tipe = Type.Type "Radius" [] }
+        , { name = "xs", comment = "Extra small radius.", tipe = Type.Type "Radius" [] }
+        , { name = "sm", comment = "Small radius.", tipe = Type.Type "Radius" [] }
+        , { name = "md", comment = "Medium radius.", tipe = Type.Type "Radius" [] }
+        , { name = "lg", comment = "Large radius.", tipe = Type.Type "Radius" [] }
+        , { name = "xl", comment = "Extra large radius.", tipe = Type.Type "Radius" [] }
+        , { name = "xl2", comment = "Extra large 2 radius.", tipe = Type.Type "Radius" [] }
+        , { name = "xl3", comment = "Extra large 3 radius.", tipe = Type.Type "Radius" [] }
+        , { name = "full", comment = "Full radius.", tipe = Type.Type "Radius" [] }
+        , { name = "custom", comment = "Custom radius.", tipe = Type.Lambda (Type.Type "Float" []) (Type.Type "Radius" []) }
+        , { name = "toCSS", comment = "Convert to CSS.", tipe = Type.Lambda (Type.Type "Radius" []) (Type.Type "String" []) }
         ]
     , binops = []
     }

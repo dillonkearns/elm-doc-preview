@@ -239,16 +239,21 @@ update msg model =
                             case Tui.Picker.selected picker of
                                 Just targetVersion ->
                                     let
-                                        diffRef =
-                                            baseVersion ++ ".." ++ targetVersion
+                                        -- Normalize order: older version is always the base
+                                        -- HEAD is always "newer" than any version
+                                        ( olderVersion, newerVersion ) =
+                                            orderVersions baseVersion targetVersion
+
+                                        diffLabel =
+                                            olderVersion ++ " → " ++ newerVersion
                                     in
                                     ( { model
                                         | comparePicker = Nothing
                                         , loadingDiff = True
-                                        , diffVersion = Just diffRef
-                                        , toasts = Toast.toast ("Loading diff " ++ diffRef ++ "...") model.toasts
+                                        , diffVersion = Just diffLabel
+                                        , toasts = Toast.toast ("Loading diff " ++ diffLabel ++ "...") model.toasts
                                       }
-                                    , Effect.perform GotDiff (model.loadDiff baseVersion)
+                                    , Effect.perform GotDiff (model.loadDiff olderVersion)
                                     )
 
                                 Nothing ->
@@ -403,6 +408,13 @@ update msg model =
 
                         Nothing ->
                             model.rightView
+                , activeLeftTab =
+                    case maybeDiff of
+                        Just _ ->
+                            ChangesTab
+
+                        Nothing ->
+                            model.activeLeftTab
                 , toasts = Toast.toast toastMessage model.toasts
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
@@ -1629,6 +1641,55 @@ buildRightPaneCache wrapWidth model key =
             }
 
 
+orderVersions : String -> String -> ( String, String )
+orderVersions a b =
+    if a == "HEAD" then
+        -- HEAD is always newer
+        ( b, "HEAD" )
+
+    else if b == "HEAD" then
+        ( a, "HEAD" )
+
+    else
+        -- Compare semver: older version first
+        case compareVersionStrings a b of
+            GT ->
+                ( b, a )
+
+            _ ->
+                ( a, b )
+
+
+compareVersionStrings : String -> String -> Order
+compareVersionStrings a b =
+    let
+        toInts s =
+            s |> String.split "." |> List.filterMap String.toInt
+    in
+    compareLists (toInts a) (toInts b)
+
+
+compareLists : List Int -> List Int -> Order
+compareLists a b =
+    case ( a, b ) of
+        ( [], [] ) ->
+            EQ
+
+        ( [], _ ) ->
+            LT
+
+        ( _, [] ) ->
+            GT
+
+        ( x :: xs, y :: ys ) ->
+            case compare x y of
+                EQ ->
+                    compareLists xs ys
+
+                other ->
+                    other
+
+
 docsContentCacheKey : Model -> String
 docsContentCacheKey model =
     let
@@ -1716,14 +1777,12 @@ findLineForItem itemName lines =
                     String.contains ("## " ++ String.dropLeft 2 itemName) text
 
                 else
-                    -- Match definitions, not mentions in code blocks
-                    -- Require gutter character (┃) to distinguish definitions from code examples
-                    String.contains "┃" text
-                        && (String.contains (itemName ++ " :") text
-                                || String.contains (itemName ++ " =") text
-                                || String.contains ("type " ++ itemName ++ " ") text
-                                || String.contains ("type alias " ++ itemName ++ " ") text
-                           )
+                    -- Match definitions: item name must appear right after the gutter
+                    -- "┃ xs : Radius" matches but "┃     { xs : Float" does not
+                    String.contains ("┃ " ++ itemName ++ " :") text
+                        || String.contains ("┃ " ++ itemName ++ " =") text
+                        || String.contains ("┃ type " ++ itemName ++ " ") text
+                        || String.contains ("┃ type alias " ++ itemName ++ " ") text
             )
         |> List.head
         |> Maybe.map Tuple.first
