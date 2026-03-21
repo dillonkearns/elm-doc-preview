@@ -427,6 +427,13 @@ suite =
                         |> TuiTest.ensureViewHas "# Basics"
                         |> TuiTest.ensureViewHas "# Advanced"
                         |> TuiTest.expectRunning
+            , test "items pane shows all section headings including from same markdown block" <|
+                \() ->
+                    startBrowse [ cliOptionModule ]
+                        -- 3 headings (When to Use, Example, Decoders) + 4 items (Option, CliDecoder, string, int) = 7
+                        |> TuiTest.ensureViewHas "1 of 7"
+                        |> TuiTest.ensureViewHas "# Decoders"
+                        |> TuiTest.expectRunning
             , test "items pane shows no items for group headers" <|
                 \() ->
                     startBrowse treeModules
@@ -839,6 +846,38 @@ sectionedModule =
         , { name = "bar"
           , comment = "An advanced function."
           , tipe = Type.Type "Int" []
+          }
+        ]
+    , binops = []
+    }
+
+
+cliOptionModule : Docs.Module
+cliOptionModule =
+    { name = "Cli.Option.Typed"
+    , comment = "Typed CLI options.\n\n## When to Use This\n\nUse when you need typed options.\n\n## Example\n\n    type alias Options =\n        { name : String }\n\n@docs Option, CliDecoder\n\n## Decoders\n\n@docs string, int"
+    , unions =
+        [ { name = "CliDecoder"
+          , comment = "A decoder for CLI values."
+          , args = [ "value" ]
+          , tags = [ ( "StringDecoder", [] ), ( "IntDecoder", [] ) ]
+          }
+        ]
+    , aliases =
+        [ { name = "Option"
+          , comment = "The type for an option."
+          , args = [ "from", "to" ]
+          , tipe = Type.Type "String" []
+          }
+        ]
+    , values =
+        [ { name = "string"
+          , comment = "A string option."
+          , tipe = Type.Type "CliDecoder" [ Type.Type "String" [] ]
+          }
+        , { name = "int"
+          , comment = "An int option."
+          , tipe = Type.Type "CliDecoder" [ Type.Type "Int" [] ]
           }
         ]
     , binops = []

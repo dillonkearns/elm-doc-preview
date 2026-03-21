@@ -327,7 +327,7 @@ view ctx model =
             , footer = "? close  q quit"
             , width = min 50 (ctx.width - 4)
             }
-            { termWidth = ctx.width, termHeight = ctx.height }
+            { width = ctx.width, height = ctx.height }
             bgRows
             |> Tui.lines
 

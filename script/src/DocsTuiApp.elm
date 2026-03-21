@@ -338,8 +338,16 @@ resolveElmHome =
                         BackendTask.succeed elmHome
 
                     Nothing ->
-                        Script.command "echo" [ "$HOME" ]
-                            |> BackendTask.map (\home -> String.trim home ++ "/.elm")
+                        BackendTask.Env.get "HOME"
+                            |> BackendTask.map
+                                (\maybeHome ->
+                                    case maybeHome of
+                                        Just home ->
+                                            home ++ "/.elm"
+
+                                        Nothing ->
+                                            "/Users/" ++ "unknown" ++ "/.elm"
+                                )
             )
 
 
@@ -670,44 +678,52 @@ buildLoadPackageDocs packageName =
         |> BackendTask.andThen
             (\elmHome ->
                 let
-                    -- Find the latest installed version
                     packageDir =
                         elmHome ++ "/0.19.1/packages/" ++ packageName
                 in
-                Script.command "ls" [ packageDir ]
-                    |> BackendTask.map
-                        (\output ->
-                            output
-                                |> String.trim
-                                |> String.lines
-                                |> List.filter (not << String.isEmpty)
-                                |> List.reverse
-                                |> List.head
-                                |> Maybe.withDefault ""
-                        )
+                BackendTask.File.exists packageDir
                     |> BackendTask.andThen
-                        (\latestVersion ->
-                            if String.isEmpty latestVersion then
-                                -- Package not installed, try fetching latest from registry
+                        (\dirExists ->
+                            if not dirExists then
                                 fetchPackageDocsFromRegistry packageName
 
                             else
-                                let
-                                    docsPath =
-                                        packageDir ++ "/" ++ latestVersion ++ "/docs.json"
-                                in
-                                BackendTask.File.rawFile docsPath
+                                -- Find versions by listing directory
+                                Script.command "ls" [ packageDir ]
                                     |> BackendTask.map
-                                        (\json ->
-                                            case Decode.decodeString (Decode.list Docs.decoder) json of
-                                                Ok modules ->
-                                                    modules
-
-                                                Err _ ->
-                                                    []
+                                        (\output ->
+                                            output
+                                                |> String.trim
+                                                |> String.lines
+                                                |> List.filter (not << String.isEmpty)
+                                                |> List.reverse
+                                                |> List.head
+                                                |> Maybe.withDefault ""
                                         )
-                                    |> BackendTask.onError
-                                        (\_ -> fetchPackageDocsFromRegistry packageName)
+                                    |> BackendTask.onError (\_ -> BackendTask.succeed "")
+                                    |> BackendTask.andThen
+                                        (\latestVersion ->
+                                            if String.isEmpty latestVersion then
+                                                fetchPackageDocsFromRegistry packageName
+
+                                            else
+                                                let
+                                                    docsPath =
+                                                        packageDir ++ "/" ++ latestVersion ++ "/docs.json"
+                                                in
+                                                BackendTask.File.rawFile docsPath
+                                                    |> BackendTask.map
+                                                        (\json ->
+                                                            case Decode.decodeString (Decode.list Docs.decoder) json of
+                                                                Ok modules ->
+                                                                    modules
+
+                                                                Err _ ->
+                                                                    []
+                                                        )
+                                                    |> BackendTask.onError
+                                                        (\_ -> fetchPackageDocsFromRegistry packageName)
+                                        )
                         )
             )
 

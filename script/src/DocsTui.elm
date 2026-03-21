@@ -86,7 +86,7 @@ type Msg
     | GotDiff (Maybe ApiDiff)
     | SpinnerTick
     | ToastTick
-    | GotPackageDocs String (List Docs.Module)
+    | GotPackageDocs String (Result FatalError (List Docs.Module))
 
 
 init :
@@ -241,7 +241,7 @@ update msg model =
                                         , loadingDiff = True
                                         , toasts = Toast.toast ("Loading " ++ packageName ++ "...") model.toasts
                                       }
-                                    , Effect.perform (GotPackageDocs packageName) (model.loadPackageDocs packageName)
+                                    , Effect.attempt (GotPackageDocs packageName) (model.loadPackageDocs packageName)
                                     )
 
                                 Nothing ->
@@ -381,22 +381,32 @@ update msg model =
         ToastTick ->
             ( { model | toasts = Toast.tick model.toasts }, Effect.none )
 
-        GotPackageDocs packageName newModules ->
-            ( { model
-                | modules = newModules
-                , moduleTree = ModuleTree.build (List.map .name newModules)
-                , browsingPackage = Just packageName
-                , loadingDiff = False
-                , rightView = DocsView
-                , diff = Nothing
-                , activeLeftTab = ModulesTab
-                , cachedDocsContent = Nothing
-                , cachedRightPane = Nothing
-                , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
-              }
-                |> refreshRightPaneCache
-            , Effect.none
-            )
+        GotPackageDocs packageName result ->
+            case result of
+                Ok newModules ->
+                    ( { model
+                        | modules = newModules
+                        , moduleTree = ModuleTree.build (List.map .name newModules)
+                        , browsingPackage = Just packageName
+                        , loadingDiff = False
+                        , rightView = DocsView
+                        , diff = Nothing
+                        , activeLeftTab = ModulesTab
+                        , cachedDocsContent = Nothing
+                        , cachedRightPane = Nothing
+                        , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
+                      }
+                        |> refreshRightPaneCache
+                    , Effect.none
+                    )
+
+                Err _ ->
+                    ( { model
+                        | loadingDiff = False
+                        , toasts = Toast.errorToast ("Failed to load " ++ packageName) model.toasts
+                      }
+                    , Effect.none
+                    )
 
 
 type Action
@@ -1062,7 +1072,7 @@ view ctx model =
                 , footer = String.fromInt (Tui.Picker.matchCount picker) ++ " packages  type to filter  Enter select  Esc cancel"
                 , width = min 60 (ctx.width - 4)
                 }
-                { termWidth = ctx.width, termHeight = ctx.height - 1 }
+                { width = ctx.width, height = ctx.height - 1 }
                 baseRows
                 |> Tui.lines
 
@@ -1078,7 +1088,7 @@ view ctx model =
                     , footer = "? close  q quit"
                     , width = min 50 (ctx.width - 4)
                     }
-                    { termWidth = ctx.width, termHeight = ctx.height - 1 }
+                    { width = ctx.width, height = ctx.height - 1 }
                     layoutRows
                     ++ [ statusBar ]
                     |> Tui.lines
@@ -1630,11 +1640,13 @@ findLineForItem itemName lines =
                     String.contains ("## " ++ String.dropLeft 2 itemName) text
 
                 else
-                    String.contains itemName text
+                    -- Match definitions, not mentions in code blocks
+                    -- Require gutter character (┃) to distinguish definitions from code examples
+                    String.contains "┃" text
                         && (String.contains (itemName ++ " :") text
                                 || String.contains (itemName ++ " =") text
-                                || String.contains ("type " ++ itemName) text
-                                || String.contains ("type alias " ++ itemName) text
+                                || String.contains ("type " ++ itemName ++ " ") text
+                                || String.contains ("type alias " ++ itemName ++ " ") text
                            )
             )
         |> List.head
@@ -1645,31 +1657,31 @@ findLineForItem itemName lines =
 moduleItemNames : Docs.Module -> List String
 moduleItemNames mod =
     Docs.toBlocks mod
-        |> List.filterMap
+        |> List.concatMap
             (\block ->
                 case block of
                     Docs.ValueBlock v ->
-                        Just v.name
+                        [ v.name ]
 
                     Docs.UnionBlock u ->
-                        Just u.name
+                        [ u.name ]
 
                     Docs.AliasBlock a ->
-                        Just a.name
+                        [ a.name ]
 
                     Docs.BinopBlock b ->
-                        Just b.name
+                        [ b.name ]
 
                     Docs.MarkdownBlock markdown ->
-                        extractHeading markdown
+                        extractHeadings markdown
 
                     _ ->
-                        Nothing
+                        []
             )
 
 
-extractHeading : String -> Maybe String
-extractHeading markdown =
+extractHeadings : String -> List String
+extractHeadings markdown =
     markdown
         |> String.trim
         |> String.lines
@@ -1681,7 +1693,6 @@ extractHeading markdown =
                 else
                     Nothing
             )
-        |> List.head
 
 
 renderTreeEntrySelected : Bool -> Model -> TreeEntry -> Tui.Screen
