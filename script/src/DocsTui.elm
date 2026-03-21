@@ -253,16 +253,12 @@ update msg model =
                         Tui.Arrow Tui.Up ->
                             ( { model | packagePicker = Just (Tui.Picker.navigateUp picker) }, Effect.none )
 
-                        Tui.Character 'j' ->
-                            ( { model | packagePicker = Just (Tui.Picker.navigateDown picker) }, Effect.none )
-
-                        Tui.Character 'k' ->
-                            ( { model | packagePicker = Just (Tui.Picker.navigateUp picker) }, Effect.none )
-
                         Tui.Backspace ->
                             ( { model | packagePicker = Just (Tui.Picker.backspace picker) }, Effect.none )
 
                         Tui.Character c ->
+                            -- All characters go to the filter input (lazygit-style)
+                            -- Use arrow keys for navigation
                             ( { model | packagePicker = Just (Tui.Picker.typeChar c picker) }, Effect.none )
 
                         _ ->

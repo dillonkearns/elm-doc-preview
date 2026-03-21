@@ -154,10 +154,21 @@ loadDocsInDir options =
 
                                 loadDiffFn =
                                     buildLoadDiff elmJson headDocsJson
+
+                                depNames =
+                                    List.map Tuple.first elmJson.directDeps
                             in
-                            loadVersions
+                            BackendTask.map2 Tuple.pair loadVersions loadAllPackageNames
                                 |> BackendTask.andThen
-                                    (\versions ->
+                                    (\( versions, allPackages ) ->
+                                        let
+                                            allPackageNames =
+                                                -- Deps first, then all others
+                                                depNames
+                                                    ++ List.filter
+                                                        (\name -> not (List.member name depNames))
+                                                        allPackages
+                                        in
                                         case options.diff of
                                             Nothing ->
                                                 -- Browse-only mode: no diff
@@ -166,7 +177,7 @@ loadDocsInDir options =
                                                     , diff = Nothing
                                                     , versions = versions
                                                     , loadDiff = loadDiffFn
-                                                    , dependencies = List.map Tuple.first elmJson.directDeps
+                                                    , dependencies = allPackageNames
                                                     , loadPackageDocs = buildLoadPackageDocs
                                                     }
 
@@ -669,6 +680,31 @@ buildLoadDiff elmJson headDocsJson =
 
             Nothing ->
                 buildRefDiff version elmJson headDocsJson
+
+
+loadAllPackageNames : BackendTask FatalError (List String)
+loadAllPackageNames =
+    resolveElmHome
+        |> BackendTask.andThen
+            (\elmHome ->
+                let
+                    packagesDir =
+                        elmHome ++ "/0.19.1/packages"
+                in
+                Script.command "sh"
+                    [ "-c"
+                    , "for author in " ++ packagesDir ++ "/*/; do for pkg in \"$author\"*/; do echo \"$(basename \"$author\")/$(basename \"$pkg\")\"; done; done 2>/dev/null || true"
+                    ]
+                    |> BackendTask.map
+                        (\output ->
+                            output
+                                |> String.trim
+                                |> String.lines
+                                |> List.filter (\s -> not (String.isEmpty s) && String.contains "/" s)
+                                |> List.sort
+                        )
+                    |> BackendTask.onError (\_ -> BackendTask.succeed [])
+            )
 
 
 buildLoadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
