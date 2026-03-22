@@ -774,15 +774,19 @@ handleAction action model =
                 case model.diff of
                     Just _ ->
                         let
-                            newView =
+                            ( newView, newTab ) =
                                 case model.rightView of
                                     DocsView ->
-                                        DiffView
+                                        ( DiffView, ChangesTab )
 
                                     DiffView ->
-                                        DocsView
+                                        ( DocsView, ModulesTab )
                         in
-                        ( { model | rightView = newView, cachedRightPane = Nothing }
+                        ( { model
+                            | rightView = newView
+                            , activeLeftTab = newTab
+                            , cachedRightPane = Nothing
+                          }
                             |> refreshRightPaneCache
                         , Effect.none
                         )

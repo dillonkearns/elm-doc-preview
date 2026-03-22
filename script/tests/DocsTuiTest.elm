@@ -87,13 +87,16 @@ suite =
                         |> TuiTest.ensureViewHas "added"
                         |> TuiTest.ensureViewHas "across"
                         |> TuiTest.expectRunning
-            , test "d toggles back to docs view" <|
+            , test "d toggles back to docs view and restores modules tab" <|
                 \() ->
-                    startWithDiff sampleDiff sampleModules
+                    -- Use treeModules which has Json.Encode — NOT in the diff
+                    startWithDiff sampleDiff treeModules
                         |> TuiTest.pressKey 'd'
+                        -- In diff view, Json.Encode should NOT be visible (not changed)
+                        |> TuiTest.ensureViewDoesNotHave "Json.Encode"
                         |> TuiTest.pressKey 'd'
-                        |> TuiTest.ensureViewDoesNotHave "CHANGE"
-                        |> TuiTest.ensureViewHas "Docs"
+                        -- After toggling back, Json.Encode SHOULD be visible (all modules shown)
+                        |> TuiTest.ensureViewHas "Json.Encode"
                         |> TuiTest.expectRunning
             , test "starts in docs view by default even with diff data" <|
                 \() ->
@@ -317,8 +320,10 @@ suite =
                 \() ->
                     startWithDiff sampleDiff sampleModules
                         |> TuiTest.pressKey 'd'
+                        -- d switches to ChangesTab; first entry is Http (added)
+                        -- Navigate to Json.Decode (second entry)
+                        |> TuiTest.pressKey 'j'
                         -- sampleDiff has Json.Decode with added: ["decodeString"]
-                        -- Items should only show "decodeString", not all module items
                         |> TuiTest.ensureViewHas "decodeString"
                         |> TuiTest.expectRunning
             , test "in diff view, newly added module shows its items not another module's" <|
