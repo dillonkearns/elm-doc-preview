@@ -697,14 +697,15 @@ suite =
                         |> TuiTest.expectRunning
             ]
         , describe "internal link click navigation"
-            [ test "clicking on link text navigates to target module" <|
+            [ test "clicking on link text navigates and updates docs pane" <|
                 \() ->
                     startBrowse [ linkModule, httpModule ]
                         |> TuiTest.ensureViewHas "Docs: MyModule"
-                        -- clickText finds the line with "See" and clicks on it
-                        -- The line contains link text "Http" with destination "Http"
                         |> TuiTest.clickText "See"
+                        -- Should show Http's docs content, not MyModule's
                         |> TuiTest.ensureViewHas "Docs: Http"
+                        |> TuiTest.ensureViewHas "Make a GET request"
+                        |> TuiTest.ensureViewDoesNotHave "A module with links"
                         |> TuiTest.expectRunning
             , test "p without dependencies does nothing" <|
                 \() ->

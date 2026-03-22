@@ -630,6 +630,7 @@ navigateToLink destination model =
                                         |> Layout.setSelectedIndex "modules" idx
                                         |> Layout.resetScroll "docs"
                                         |> Layout.setSelectedIndex "items" 0
+                                , selectedModuleName = moduleName
                                 , cachedDocsContent = Nothing
                                 , cachedRightPane = Nothing
                             }
