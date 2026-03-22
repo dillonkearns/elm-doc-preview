@@ -1757,7 +1757,7 @@ extractLinksFromComment comment =
                             Nothing
 
                         else
-                            Just { destination = destination, text = linkText }
+                            Just { destination = destination, text = String.replace "`" "" linkText }
 
                     _ ->
                         Nothing

@@ -1036,7 +1036,7 @@ cliOptionModule =
 linkModule : Docs.Module
 linkModule =
     { name = "MyModule"
-    , comment = "A module with links.\n\nSee [Http](Http) for HTTP requests.\n\n@docs myFunction"
+    , comment = "A module with links.\n\nSee [`Http`](Http) for HTTP requests.\n\n@docs myFunction"
     , unions = []
     , aliases = []
     , values =
