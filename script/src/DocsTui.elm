@@ -348,22 +348,28 @@ update msg model =
             handleKeyPressed event model
 
         MouseEvent mouseEvent ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                ( newLayout, maybeMsg ) =
-                    Layout.handleMouse mouseEvent ctx (viewLayout ctx model) model.layout
-            in
-            case maybeMsg of
-                Just subMsg ->
-                    update subMsg { model | layout = newLayout }
+            -- Check for clicks on internal links in the docs pane
+            case handleDocsPaneClick mouseEvent model of
+                Just result ->
+                    result
 
                 Nothing ->
-                    ( { model | layout = newLayout }
-                        |> syncItemsToScroll
-                    , Effect.none
-                    )
+                    let
+                        ctx =
+                            Layout.contextOf model.layout
+
+                        ( newLayout, maybeMsg ) =
+                            Layout.handleMouse mouseEvent ctx (viewLayout ctx model) model.layout
+                    in
+                    case maybeMsg of
+                        Just subMsg ->
+                            update subMsg { model | layout = newLayout }
+
+                        Nothing ->
+                            ( { model | layout = newLayout }
+                                |> syncItemsToScroll
+                            , Effect.none
+                            )
 
         SelectEntry idx ->
             let
@@ -521,6 +527,70 @@ type Action
     | ScrollToSelectedItem
     | OpenPackagePicker
     | FollowLink
+
+
+handleDocsPaneClick : Tui.MouseEvent -> Model -> Maybe ( Model, Effect.Effect Msg )
+handleDocsPaneClick mouseEvent model =
+    case mouseEvent of
+        Tui.Click { row, col } ->
+            let
+                ctx =
+                    Layout.contextOf model.layout
+
+                -- Compute docs pane left edge
+                docsPaneLeft =
+                    min 28 (ctx.width // 4) + 20 + 4
+
+                scrollOffset =
+                    Layout.scrollPosition "docs" model.layout
+
+                -- Map click row to content line (accounting for title bar and scroll)
+                contentLine =
+                    row - 1 + scrollOffset
+            in
+            -- Only handle clicks in the docs pane area
+            if col > docsPaneLeft && row > 0 then
+                -- Check if this line has an internal link
+                case model.cachedRightPane of
+                    Just cached ->
+                        let
+                            clickedLineText =
+                                cached.lines
+                                    |> List.drop contentLine
+                                    |> List.head
+                                    |> Maybe.map Tui.toString
+                                    |> Maybe.withDefault ""
+
+                            -- Find internal links from the module comment
+                            links =
+                                case selectedModule model of
+                                    Just mod ->
+                                        extractLinksFromComment mod.comment
+
+                                    Nothing ->
+                                        []
+
+                            -- Check if any link text appears on the clicked line
+                            matchingLink =
+                                links
+                                    |> List.filter (\link -> String.contains link.text clickedLineText)
+                                    |> List.head
+                        in
+                        case matchingLink of
+                            Just link ->
+                                Just (navigateToLink link.destination model)
+
+                            Nothing ->
+                                Nothing
+
+                    Nothing ->
+                        Nothing
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
 
 
 navigateToLink : String -> Model -> ( Model, Effect.Effect Msg )
