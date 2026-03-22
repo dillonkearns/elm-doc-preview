@@ -326,10 +326,13 @@ handleKeyPressed event model =
                         Nothing ->
                             -- Let the framework handle number keys, /, search etc.
                             case Layout.handleKeyEvent event (viewLayout (Layout.contextOf model.layout) model) model.layout of
-                                ( newLayout, True ) ->
+                                ( newLayout, Just subMsg, _ ) ->
+                                    update subMsg { model | layout = newLayout }
+
+                                ( newLayout, Nothing, True ) ->
                                     ( { model | layout = newLayout }, Effect.none )
 
-                                ( _, False ) ->
+                                ( _, _, False ) ->
                                     case Keybinding.dispatch (allBindings model) event of
                                         Just action ->
                                             handleAction action model
