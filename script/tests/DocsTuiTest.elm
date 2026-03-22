@@ -695,6 +695,17 @@ suite =
                         |> TuiTest.pressKey 'r'
                         |> TuiTest.ensureViewHas "jfmengels/elm-review"
                         |> TuiTest.expectRunning
+            ]
+        , describe "internal link click navigation"
+            [ test "clicking on link text navigates to target module" <|
+                \() ->
+                    startBrowse [ linkModule, httpModule ]
+                        |> TuiTest.ensureViewHas "Docs: MyModule"
+                        -- clickText finds the line with "See" and clicks on it
+                        -- The line contains link text "Http" with destination "Http"
+                        |> TuiTest.clickText "See"
+                        |> TuiTest.ensureViewHas "Docs: Http"
+                        |> TuiTest.expectRunning
             , test "p without dependencies does nothing" <|
                 \() ->
                     startBrowse sampleModules
@@ -1016,6 +1027,22 @@ cliOptionModule =
         , { name = "int"
           , comment = "An int option."
           , tipe = Type.Type "CliDecoder" [ Type.Type "Int" [] ]
+          }
+        ]
+    , binops = []
+    }
+
+
+linkModule : Docs.Module
+linkModule =
+    { name = "MyModule"
+    , comment = "A module with links.\n\nSee [Http](Http) for HTTP requests.\n\n@docs myFunction"
+    , unions = []
+    , aliases = []
+    , values =
+        [ { name = "myFunction"
+          , comment = "Does something."
+          , tipe = Type.Type "String" []
           }
         ]
     , binops = []
