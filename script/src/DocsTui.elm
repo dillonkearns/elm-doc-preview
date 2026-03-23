@@ -25,7 +25,7 @@ import Markdown.Block exposing (ListItem(..), Task(..))
 import Markdown.Html
 import Markdown.Parser
 import Markdown.Renderer exposing (Renderer)
-import ModuleTree exposing (TreeEntry(..))
+-- ModuleTree removed — using native Layout.withTreeView + Layout.selectedItem
 import SyntaxHighlight
 import Tui
 import Tui.Effect as Effect
@@ -35,9 +35,8 @@ import Tui.Layout as Layout
 import Tui.Modal as Modal
 import Tui.FuzzyMatch as FuzzyMatch
 import Tui.Picker
-import Tui.Spinner
+import Tui.Status as Status
 import Tui.Sub
-import Tui.Toast as Toast
 
 
 type alias Model =
@@ -46,7 +45,6 @@ type alias Model =
     , diff : Maybe ApiDiff
     , rightView : RightView
     , showHelp : Bool
-    , moduleTree : ModuleTree.ModuleTree
     , activeLeftTab : LeftTab
     -- filterInput removed — using native Layout.selectableList filtering
     , versions : List String
@@ -55,7 +53,7 @@ type alias Model =
     , loadingDiff : Bool
     , diffVersion : Maybe String
     , spinnerTick : Int
-    , toasts : Toast.State
+    , status : Status.State
     , cachedDocsContent : Maybe { key : String, content : List Tui.Screen }
     , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
     , itemLinePositions : List ( String, Int )
@@ -89,8 +87,7 @@ type Msg
     | SelectItem Int
     | GotContext { width : Int, height : Int }
     | GotDiff (Maybe ApiDiff)
-    | SpinnerTick
-    | ToastTick
+    | Tick
     | GotPackageDocs String (Result FatalError (List Docs.Module))
 
 
@@ -112,16 +109,19 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
       , diff = diff
       , rightView = DocsView
       , showHelp = False
-      , moduleTree = ModuleTree.build (List.map .name modules)
       , activeLeftTab = ModulesTab
       -- filterInput removed
       , versions = versions
       , loadDiff = loadDiff
-      , selectedModuleName = ""
+      , selectedModuleName =
+            modules
+                |> List.head
+                |> Maybe.map .name
+                |> Maybe.withDefault ""
       , loadingDiff = False
       , diffVersion = Nothing
       , spinnerTick = 0
-      , toasts = Toast.init
+      , status = Status.init
       , cachedDocsContent = Nothing
       , cachedRightPane = Nothing
       , itemLinePositions = []
@@ -139,45 +139,40 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
     )
 
 
-visibleEntries : Model -> List TreeEntry
+visibleEntries : Model -> List String
 visibleEntries model =
-    let
-        baseEntries =
-            case model.activeLeftTab of
-                ModulesTab ->
-                    let
-                        readmeEntry =
-                            case model.readme of
-                                Just _ ->
-                                    [ Leaf { name = "README", depth = 0 } ]
-
-                                Nothing ->
-                                    []
-                    in
-                    readmeEntry ++ ModuleTree.visibleEntries model.moduleTree
-
-                ChangesTab ->
-                    case model.diff of
-                        Just diff ->
-                            changedModuleEntries diff
+    case model.activeLeftTab of
+        ModulesTab ->
+            let
+                readmeEntry =
+                    case model.readme of
+                        Just _ ->
+                            [ "README" ]
 
                         Nothing ->
-                            ModuleTree.visibleEntries model.moduleTree
+                            []
+            in
+            readmeEntry ++ List.map .name model.modules
 
-                VersionsTab ->
-                    model.versions
-                        |> List.map (\v -> Leaf { name = v, depth = 0 })
-    in
-    baseEntries
+        ChangesTab ->
+            case model.diff of
+                Just diff ->
+                    changedModuleNames diff
+
+                Nothing ->
+                    List.map .name model.modules
+
+        VersionsTab ->
+            model.versions
 
 
-changedModuleEntries : ApiDiff -> List TreeEntry
-changedModuleEntries diff =
+changedModuleNames : ApiDiff -> List String
+changedModuleNames diff =
     let
         readmeEntry =
             case diff.readmeDiff of
                 Just _ ->
-                    [ Leaf { name = "README", depth = 0 } ]
+                    [ "README" ]
 
                 Nothing ->
                     []
@@ -196,41 +191,27 @@ changedModuleEntries diff =
                             acc ++ [ name ]
                     )
                     []
-
-        moduleEntries =
-            allChangedNames
-                |> List.map (\name -> Leaf { name = name, depth = 0 })
     in
-    readmeEntry ++ moduleEntries
+    readmeEntry ++ allChangedNames
 
 
-selectedEntry : Model -> Maybe TreeEntry
-selectedEntry model =
+selectedEntryName : Model -> Maybe String
+selectedEntryName model =
     if String.isEmpty model.selectedModuleName then
-        let
-            idx =
-                Layout.selectedIndex "modules" model.layout
-        in
-        visibleEntries model
-            |> List.drop idx
-            |> List.head
+        Layout.selectedItem "modules" (visibleEntries model) (viewLayout (Layout.contextOf model.layout) model) model.layout
 
     else
-        Just (Leaf { name = model.selectedModuleName, depth = 0 })
+        Just model.selectedModuleName
 
 
 selectedModule : Model -> Maybe Docs.Module
 selectedModule model =
-    if not (String.isEmpty model.selectedModuleName) then
-        findModule model.selectedModuleName model.modules
+    case selectedEntryName model of
+        Just name ->
+            findModule name model.modules
 
-    else
-        case selectedEntry model of
-            Just (Leaf { name }) ->
-                findModule name model.modules
-
-            _ ->
-                Nothing
+        Nothing ->
+            Nothing
 
 
 handleKeyPressed : Tui.KeyEvent -> Model -> ( Model, Effect.Effect Msg )
@@ -256,7 +237,7 @@ handleKeyPressed event model =
                                         | comparePicker = Nothing
                                         , loadingDiff = True
                                         , diffVersion = Just diffLabel
-                                        , toasts = Toast.toast ("Loading diff " ++ diffLabel ++ "...") model.toasts
+                                        , status = Status.toast ("Loading diff " ++ diffLabel ++ "...") model.status
                                       }
                                     , Effect.perform GotDiff (model.loadDiff olderVersion)
                                     )
@@ -296,7 +277,7 @@ handleKeyPressed event model =
                                             ( { model
                                                 | packagePicker = Nothing
                                                 , loadingDiff = True
-                                                , toasts = Toast.toast ("Loading " ++ packageName ++ "...") model.toasts
+                                                , status = Status.toast ("Loading " ++ packageName ++ "...") model.status
                                               }
                                             , Effect.attempt (GotPackageDocs packageName) (model.loadPackageDocs packageName)
                                             )
@@ -381,7 +362,6 @@ update msg model =
                     visibleEntries model
                         |> List.drop idx
                         |> List.head
-                        |> Maybe.map ModuleTree.entryName
                         |> Maybe.withDefault ""
             in
             ( { model
@@ -452,7 +432,7 @@ update msg model =
 
                         Nothing ->
                             model.activeLeftTab
-                , toasts = Toast.toast toastMessage model.toasts
+                , status = Status.toast toastMessage model.status
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
               }
@@ -460,18 +440,14 @@ update msg model =
             , Effect.none
             )
 
-        SpinnerTick ->
-            ( { model | spinnerTick = model.spinnerTick + 1 }, Effect.none )
-
-        ToastTick ->
-            ( { model | toasts = Toast.tick model.toasts }, Effect.none )
+        Tick ->
+            ( { model | spinnerTick = model.spinnerTick + 1, status = Status.tick model.status }, Effect.none )
 
         GotPackageDocs packageName result ->
             case result of
                 Ok newModules ->
                     ( { model
                         | modules = newModules
-                        , moduleTree = ModuleTree.build (List.map .name newModules)
                         , browsingPackage = Just packageName
                         , loadingDiff = False
                         , rightView = DocsView
@@ -484,7 +460,7 @@ update msg model =
                             preRenderAllModules
                                 (docsPaneWidth (Layout.contextOf model.layout) - 2)
                                 newModules
-                        , toasts = Toast.toast ("Browsing " ++ packageName) model.toasts
+                        , status = Status.toast ("Browsing " ++ packageName) model.status
                       }
                         |> refreshRightPaneCache
                     , Effect.none
@@ -493,7 +469,7 @@ update msg model =
                 Err _ ->
                     ( { model
                         | loadingDiff = False
-                        , toasts = Toast.errorToast ("Failed to load " ++ packageName) model.toasts
+                        , status = Status.errorToast ("Failed to load " ++ packageName) model.status
                       }
                     , Effect.none
                     )
@@ -513,7 +489,6 @@ type Action
     | ToggleHelp
     | CloseHelp
     | ToggleDiffView
-    | ToggleTreeNode
     | SwitchToModulesTab
     | SwitchToChangesTab
     | SwitchToVersionsTab
@@ -616,7 +591,7 @@ navigateToLink destination model =
                 maybeIdx =
                     entries
                         |> List.indexedMap Tuple.pair
-                        |> List.filter (\( _, entry ) -> ModuleTree.entryName entry == moduleName)
+                        |> List.filter (\( _, entry ) -> entry == moduleName)
                         |> List.head
                         |> Maybe.map Tuple.first
             in
@@ -658,12 +633,12 @@ navigateToLink destination model =
                                     newModel
                     in
                     ( finalModel
-                        |> (\m -> { m | toasts = Toast.toast ("→ " ++ moduleName) m.toasts })
+                        |> (\m -> { m | status = Status.toast ("→ " ++ moduleName) m.status })
                     , Effect.none
                     )
 
                 Nothing ->
-                    ( { model | toasts = Toast.errorToast ("Module " ++ moduleName ++ " not found") model.toasts }
+                    ( { model | status = Status.errorToast ("Module " ++ moduleName ++ " not found") model.status }
                     , Effect.none
                     )
 
@@ -816,8 +791,8 @@ handleAction action model =
 
             else if model.activeLeftTab == VersionsTab then
                 -- On versions tab: open compare-against picker
-                case selectedEntry model of
-                    Just (Leaf { name }) ->
+                case selectedEntryName model of
+                    Just name ->
                         let
                             otherVersions =
                                 "HEAD"
@@ -868,18 +843,17 @@ handleAction action model =
                             [] ->
                                 ( model, Effect.none )
 
-        ToggleTreeNode ->
-            case selectedEntry model of
-                Just (Group { prefix }) ->
-                    ( { model | moduleTree = ModuleTree.toggle prefix model.moduleTree }
-                    , Effect.none
-                    )
-
-                _ ->
-                    ( model, Effect.none )
-
         SwitchToModulesTab ->
-            ( { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
+            let
+                modulesModel =
+                    { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
+
+                firstEntry =
+                    visibleEntries modulesModel
+                        |> List.head
+                        |> Maybe.withDefault ""
+            in
+            ( { modulesModel | selectedModuleName = firstEntry }
                 |> refreshRightPaneCache
             , Effect.none
             )
@@ -887,7 +861,16 @@ handleAction action model =
         SwitchToChangesTab ->
             case model.diff of
                 Just _ ->
-                    ( { model | activeLeftTab = ChangesTab, rightView = DiffView, cachedRightPane = Nothing }
+                    let
+                        changesModel =
+                            { model | activeLeftTab = ChangesTab, rightView = DiffView, cachedRightPane = Nothing }
+
+                        firstEntry =
+                            visibleEntries changesModel
+                                |> List.head
+                                |> Maybe.withDefault ""
+                    in
+                    ( { changesModel | selectedModuleName = firstEntry }
                         |> refreshRightPaneCache
                     , Effect.none
                     )
@@ -984,15 +967,19 @@ handleAction action model =
                 ( model, Effect.none )
 
             else
-                ( { model | activeLeftTab = VersionsTab }, Effect.none )
+                let
+                    firstVersion =
+                        model.versions |> List.head |> Maybe.withDefault ""
+                in
+                ( { model | activeLeftTab = VersionsTab, selectedModuleName = firstVersion }, Effect.none )
 
         LoadDiffForVersion ->
             if model.loadingDiff then
                 ( model, Effect.none )
 
             else
-                case selectedEntry model of
-                    Just (Leaf { name }) ->
+                case selectedEntryName model of
+                    Just name ->
                         ( { model | loadingDiff = True, diffVersion = Just name }
                         , Effect.perform GotDiff (model.loadDiff name)
                         )
@@ -1021,8 +1008,29 @@ handleAction action model =
                                 Layout.navigateDown paneId (viewLayout ctx m) m.layout
                         in
                         step (i - 1) ( { m | layout = newLayout }, Effect.none )
+
+                ( pageModel, pageEffect ) =
+                    step pageSize ( model, Effect.none )
+
+                entries =
+                    visibleEntries pageModel
+
+                newSelectedName =
+                    if paneId == "modules" then
+                        Layout.selectedItem "modules" entries (viewLayout ctx pageModel) pageModel.layout
+                            |> Maybe.withDefault (entries |> List.head |> Maybe.withDefault pageModel.selectedModuleName)
+
+                    else
+                        pageModel.selectedModuleName
             in
-            step pageSize ( model, Effect.none )
+            ( { pageModel
+                | selectedModuleName = newSelectedName
+                , cachedDocsContent = Nothing
+                , cachedRightPane = Nothing
+              }
+                |> refreshRightPaneCache
+            , pageEffect
+            )
 
         PageUp ->
             let
@@ -1045,8 +1053,29 @@ handleAction action model =
                                 Layout.navigateUp paneId (viewLayout ctx m) m.layout
                         in
                         step (i - 1) ( { m | layout = newLayout }, Effect.none )
+
+                ( pageModel, pageEffect ) =
+                    step pageSize ( model, Effect.none )
+
+                entries =
+                    visibleEntries pageModel
+
+                newSelectedName =
+                    if paneId == "modules" then
+                        Layout.selectedItem "modules" entries (viewLayout ctx pageModel) pageModel.layout
+                            |> Maybe.withDefault (entries |> List.head |> Maybe.withDefault pageModel.selectedModuleName)
+
+                    else
+                        pageModel.selectedModuleName
             in
-            step pageSize ( model, Effect.none )
+            ( { pageModel
+                | selectedModuleName = newSelectedName
+                , cachedDocsContent = Nothing
+                , cachedRightPane = Nothing
+              }
+                |> refreshRightPaneCache
+            , pageEffect
+            )
 
         ScrollDocsPageDown ->
             let
@@ -1302,7 +1331,7 @@ modulesBindings model =
                     LoadDiffForVersion
 
                 _ ->
-                    ToggleTreeNode
+                    FocusDocs
     in
     Keybinding.group "Modules"
         [ Keybinding.binding (Tui.Character 'j') "Next module" NavigateDown
@@ -1386,43 +1415,45 @@ view ctx model =
         statusBar =
             renderStatusBar model ctx.width
 
-        toastView =
-            Toast.view model.toasts
+        waitingMessage =
+            if model.loadingDiff then
+                Just "Loading diff..."
+
+            else
+                Nothing
+
+        statusView =
+            Status.view { waiting = waitingMessage, tick = model.spinnerTick } model.status
+
+        bottomBar =
+            Tui.concat [ statusBar, Tui.text " ", statusView ]
 
         layoutRows =
             Layout.toRows layoutState (viewLayout contentCtx model)
     in
     case model.comparePicker of
         Just { picker } ->
-            let
-                baseRows =
-                    layoutRows ++ [ statusBar ]
-            in
             Modal.overlay
                 { title = Tui.Picker.title picker
                 , body = Tui.Picker.viewBody picker
                 , footer = String.fromInt (Tui.Picker.matchCount picker) ++ " versions  Enter select  Esc cancel"
-                , width = min 50 (ctx.width - 4)
+                , width = Modal.defaultWidth ctx.width
                 }
                 { width = ctx.width, height = ctx.height - 1 }
-                baseRows
+                (layoutRows ++ [ statusBar ])
                 |> Tui.lines
 
         Nothing ->
             case model.packagePicker of
                 Just picker ->
-                    let
-                        baseRows =
-                            layoutRows ++ [ statusBar ]
-                    in
                     Modal.overlay
                         { title = Tui.Picker.title picker
                         , body = Tui.Picker.viewBody picker
                         , footer = String.fromInt (Tui.Picker.matchCount picker) ++ " packages  type to filter  Enter select  Esc cancel"
-                        , width = min 60 (ctx.width - 4)
+                        , width = Modal.defaultWidth ctx.width
                         }
                         { width = ctx.width, height = ctx.height - 1 }
-                        baseRows
+                        (layoutRows ++ [ statusBar ])
                         |> Tui.lines
 
                 Nothing ->
@@ -1435,19 +1466,15 @@ view ctx model =
                             { title = "Keybindings"
                             , body = helpBody
                             , footer = "? close  q quit"
-                            , width = min 50 (ctx.width - 4)
+                            , width = Modal.defaultWidth ctx.width
                             }
                             { width = ctx.width, height = ctx.height - 1 }
                             layoutRows
                             ++ [ statusBar ]
                             |> Tui.lines
 
-                    else if Toast.hasToasts model.toasts then
-                        (layoutRows ++ [ Tui.concat [ statusBar, Tui.text " ", toastView ] ])
-                            |> Tui.lines
-
                     else
-                        (layoutRows ++ [ statusBar ])
+                        (layoutRows ++ [ bottomBar ])
                             |> Tui.lines
 
 
@@ -1551,20 +1578,42 @@ modulesPane ctx model =
                 { title = leftPaneTitle model
                 , width = modulesPaneWidth ctx.width
                 }
-                (Layout.selectableList
-                    { onSelect = SelectEntry
-                    , selected = \entry -> renderTreeEntrySelected showBadges model entry
-                    , default = \entry -> renderTreeEntryDefault showBadges model entry
-                    }
-                    entries
-                    |> Layout.withFilterable ModuleTree.entryName entries
+                (let
+                    base =
+                        Layout.selectableList
+                            { onSelect = SelectEntry
+                            , selected = \entry -> renderModuleEntrySelected showBadges model entry
+                            , default = \entry -> renderModuleEntryDefault showBadges model entry
+                            }
+                            entries
+
+                    withTree =
+                        case model.activeLeftTab of
+                            VersionsTab ->
+                                base
+
+                            _ ->
+                                base
+                                    |> Layout.withTreeView { toPath = String.split "." } entries
+                 in
+                 withTree
+                    |> Layout.withFilterable identity entries
                 )
 
+    in
+    let
+        selectedPos =
+            entries
+                |> List.indexedMap Tuple.pair
+                |> List.filter (\( _, e ) -> e == model.selectedModuleName)
+                |> List.head
+                |> Maybe.map (\( i, _ ) -> i + 1)
+                |> Maybe.withDefault 1
     in
     pane
         -- Entry count shown in footer, not prefix (framework handles [1] tab number)
         |> Layout.withFooter
-            (String.fromInt (Layout.selectedIndex "modules" model.layout + 1)
+            (String.fromInt selectedPos
                 ++ " of "
                 ++ String.fromInt entryCount
             )
@@ -1572,46 +1621,48 @@ modulesPane ctx model =
 
 itemsForCurrentView : Model -> List String
 itemsForCurrentView model =
-    case model.rightView of
-        DiffView ->
-            case ( model.diff, selectedEntry model ) of
-                ( Just diff, Just (Leaf { name }) ) ->
-                    if List.member name diff.addedModules then
-                        -- New module: show all items from the module
-                        case findModule name model.modules of
-                            Just mod ->
-                                moduleItemNames mod
+    let
+        name =
+            model.selectedModuleName
+    in
+    if String.isEmpty name then
+        []
 
-                            Nothing ->
-                                []
+    else
+        case model.rightView of
+            DiffView ->
+                case model.diff of
+                    Just diff ->
+                        if List.member name diff.addedModules then
+                            case findModule name model.modules of
+                                Just mod ->
+                                    moduleItemNames mod
 
-                    else
-                        diffItemNames diff name
+                                Nothing ->
+                                    []
 
-                _ ->
-                    []
+                        else
+                            diffItemNames diff name
 
-        DocsView ->
-            case selectedEntry model of
-                Just (Leaf { name }) ->
-                    if name == "README" then
-                        case model.readme of
-                            Just readmeContent ->
-                                extractHeadings readmeContent
+                    Nothing ->
+                        []
 
-                            Nothing ->
-                                []
+            DocsView ->
+                if name == "README" then
+                    case model.readme of
+                        Just readmeContent ->
+                            extractHeadings readmeContent
 
-                    else
-                        case selectedModule model of
-                            Just mod ->
-                                moduleItemNames mod
+                        Nothing ->
+                            []
 
-                            Nothing ->
-                                []
+                else
+                    case findModule name model.modules of
+                        Just mod ->
+                            moduleItemNames mod
 
-                _ ->
-                    []
+                        Nothing ->
+                            []
 
 
 diffItemNames : ApiDiff -> String -> List String
@@ -1804,8 +1855,8 @@ refreshRightPaneCache model =
             let
                 -- Check if we have a pre-rendered version
                 selectedName =
-                    case selectedEntry m of
-                        Just (Leaf { name }) ->
+                    case selectedEntryName m of
+                        Just name ->
                             name
 
                         _ ->
@@ -1832,8 +1883,8 @@ refreshRightPaneCache model =
                     -- Fall back to rendering on demand
                     let
                         fallbackName =
-                            case selectedEntry m of
-                                Just (Leaf { name }) ->
+                            case selectedEntryName m of
+                                Just name ->
                                     name
 
                                 _ ->
@@ -1884,8 +1935,8 @@ buildRightPaneCache : Int -> Model -> String -> { key : String, title : String, 
 buildRightPaneCache wrapWidth model key =
     case model.rightView of
         DocsView ->
-            case selectedEntry model of
-                Just (Leaf { name }) ->
+            case selectedEntryName model of
+                Just name ->
                     if name == "README" then
                         case model.readme of
                             Just readmeContent ->
@@ -1916,12 +1967,6 @@ buildRightPaneCache wrapWidth model key =
                                 , lines = [ Tui.text ("Module " ++ name ++ " not found") ]
                                 }
 
-                Just (Group { prefix }) ->
-                    { key = key
-                    , title = "Docs: " ++ prefix
-                    , lines = [ Tui.text ("Select a module under " ++ prefix) ]
-                    }
-
                 Nothing ->
                     { key = key
                     , title = "Docs"
@@ -1949,8 +1994,8 @@ buildRightPaneCache wrapWidth model key =
                                     ]
 
                                 entryDiffLines =
-                                    case selectedEntry model of
-                                        Just (Leaf { name }) ->
+                                    case selectedEntryName model of
+                                        Just name ->
                                             if name == "README" then
                                                 renderReadmeDiff diff
 
@@ -2024,12 +2069,9 @@ docsContentCacheKey : Model -> String
 docsContentCacheKey model =
     let
         entryName =
-            case selectedEntry model of
-                Just (Leaf { name }) ->
+            case selectedEntryName model of
+                Just name ->
                     name
-
-                Just (Group { prefix }) ->
-                    prefix
 
                 Nothing ->
                     ""
@@ -2079,8 +2121,8 @@ buildDocsContent model =
                     []
 
         DiffView ->
-            case ( model.diff, selectedEntry model ) of
-                ( Just diff, Just (Leaf { name }) ) ->
+            case ( model.diff, selectedEntryName model ) of
+                ( Just diff, Just name ) ->
                     if name == "README" then
                         renderReadmeDiff diff
 
@@ -2248,32 +2290,9 @@ stripLinks text =
                     )
 
 
-renderTreeEntrySelected : Bool -> Model -> TreeEntry -> Tui.Screen
-renderTreeEntrySelected showBadges model entry =
+renderModuleEntrySelected : Bool -> Model -> String -> Tui.Screen
+renderModuleEntrySelected showBadges model name =
     let
-        indent =
-            case entry of
-                Leaf { depth } ->
-                    String.repeat (depth * 2) " "
-
-                Group { depth } ->
-                    String.repeat (depth * 2) " "
-
-        prefix =
-            case entry of
-                Group { expanded } ->
-                    if expanded then
-                        "▾ "
-
-                    else
-                        "▸ "
-
-                Leaf _ ->
-                    ""
-
-        name =
-            ModuleTree.entryName entry
-
         badge =
             if showBadges then
                 moduleBadge model name
@@ -2289,36 +2308,13 @@ renderTreeEntrySelected showBadges model entry =
             , attributes = [ Tui.Bold ]
             , hyperlink = Nothing
             }
-            (indent ++ prefix ++ name ++ " ")
+            (name ++ " ")
         ]
 
 
-renderTreeEntryDefault : Bool -> Model -> TreeEntry -> Tui.Screen
-renderTreeEntryDefault showBadges model entry =
+renderModuleEntryDefault : Bool -> Model -> String -> Tui.Screen
+renderModuleEntryDefault showBadges model name =
     let
-        indent =
-            case entry of
-                Leaf { depth } ->
-                    String.repeat (depth * 2) " "
-
-                Group { depth } ->
-                    String.repeat (depth * 2) " "
-
-        prefix =
-            case entry of
-                Group { expanded } ->
-                    if expanded then
-                        "▾ "
-
-                    else
-                        "▸ "
-
-                Leaf _ ->
-                    ""
-
-        name =
-            ModuleTree.entryName entry
-
         badge =
             if showBadges then
                 moduleBadge model name
@@ -2328,7 +2324,7 @@ renderTreeEntryDefault showBadges model entry =
     in
     Tui.concat
         [ badge
-        , Tui.text (indent ++ prefix ++ name)
+        , Tui.text name
         ]
 
 
@@ -2380,10 +2376,7 @@ rightPane ctx model =
             , width = Layout.fill
             }
             (Layout.content
-                [ Tui.concat
-                    [ Tui.text "Loading diff... " |> Tui.dim
-                    , Tui.Spinner.view model.spinnerTick
-                    ]
+                [ Tui.text "Loading diff..." |> Tui.dim
                 ]
             )
 
@@ -3561,19 +3554,21 @@ renderUnifiedDiffLines diffText =
 
 subscriptions : Model -> Tui.Sub.Sub Msg
 subscriptions model =
+    let
+        waitingMessage =
+            if model.loadingDiff then
+                Just "Loading diff..."
+
+            else
+                Nothing
+    in
     Tui.Sub.batch
         ([ Tui.Sub.onKeyPress KeyPressed
          , Tui.Sub.onMouse MouseEvent
          , Tui.Sub.onContext GotContext
          ]
-            ++ (if model.loadingDiff then
-                    [ Tui.Spinner.subscriptions SpinnerTick ]
-
-                else
-                    []
-               )
-            ++ (if Toast.hasToasts model.toasts then
-                    [ Tui.Sub.every 100 ToastTick ]
+            ++ (if Status.hasActivity { waiting = waitingMessage } model.status then
+                    [ Tui.Sub.every 100 Tick ]
 
                 else
                     []
