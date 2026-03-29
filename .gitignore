@@ -21,3 +21,7 @@ script/snapshots/**/*.received.txt
 npm-debug.log
 .vercel
 .elm-doc-cache
+db/
+script/db/schema-history/
+script/diff-tui.mjs
+script/minimal-tui.mjs

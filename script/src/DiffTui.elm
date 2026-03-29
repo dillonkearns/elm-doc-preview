@@ -359,7 +359,7 @@ entriesPane ctx model =
         { title = "Modules"
         , width = modulesPaneWidth ctx.width
         }
-        (Layout.selectableList
+        (Layout.indexSelectableList
             { onSelect = SelectEntry
             , selected = \entry -> renderEntrySelected model.diff entry
             , default = \entry -> renderEntryDefault model.diff entry

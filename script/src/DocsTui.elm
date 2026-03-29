@@ -1,4 +1,4 @@
-module DocsTui exposing (Model, Msg, init, subscriptions, update, view)
+module DocsTui exposing (InitData, Model, Msg, appConfig)
 
 {-| Unified TUI for browsing Elm documentation and viewing API diffs.
 
@@ -25,48 +25,54 @@ import Markdown.Block exposing (ListItem(..), Task(..))
 import Markdown.Html
 import Markdown.Parser
 import Markdown.Renderer exposing (Renderer)
--- ModuleTree removed — using native Layout.withTreeView + Layout.selectedItem
 import SyntaxHighlight
 import Tui
 import Tui.Effect as Effect
--- Tui.Input removed — using native selectableList filtering
-import Tui.Keybinding as Keybinding
 import Tui.Layout as Layout
-import Tui.Modal as Modal
-import Tui.FuzzyMatch as FuzzyMatch
-import Tui.Picker
-import Tui.Status as Status
-import Tui.Sub
+
+
+type alias InitData =
+    { modules : List Docs.Module
+    , diff : Maybe ApiDiff
+    , versions : List String
+    , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
+    , dependencies : List String
+    , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
+    , readme : Maybe String
+    , packageVersion : Maybe String
+    }
 
 
 type alias Model =
-    { layout : Layout.State
-    , modules : List Docs.Module
+    { modules : List Docs.Module
     , diff : Maybe ApiDiff
     , rightView : RightView
-    , showHelp : Bool
     , activeLeftTab : LeftTab
-    -- filterInput removed — using native Layout.selectableList filtering
     , versions : List String
     , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
     , selectedModuleName : String
     , loadingDiff : Bool
     , diffVersion : Maybe String
-    , spinnerTick : Int
-    , status : Status.State
     , cachedDocsContent : Maybe { key : String, content : List Tui.Screen }
     , cachedRightPane : Maybe { key : String, title : String, lines : List Tui.Screen }
     , itemLinePositions : List ( String, Int )
     , internalLinks : List { line : Int, destination : String, text : String }
     , preRenderedModules : Dict.Dict String { lines : List Tui.Screen, items : List String, itemPositions : List ( String, Int ) }
+    , selectedItemIndex : Int
     , dependencies : List String
     , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
     , readme : Maybe String
-    , packagePicker : Maybe (Tui.Picker.State String)
-    , comparePicker : Maybe { baseVersion : String, picker : Tui.Picker.State String }
+    , modal : Maybe ModalKind
     , browsingPackage : Maybe String
     , homeModules : List Docs.Module
+    , packageVersion : Maybe String
     }
+
+
+type ModalKind
+    = HelpView
+    | PackagePickerModal
+    | ComparePickerModal String
 
 
 type RightView
@@ -81,36 +87,93 @@ type LeftTab
 
 
 type Msg
-    = KeyPressed Tui.KeyEvent
-    | MouseEvent Tui.MouseEvent
-    | SelectEntry Int
-    | SelectItem Int
-    | GotContext { width : Int, height : Int }
+    = SelectModule String
+    | SelectItemByName String
+    | CloseModal
+    | BrowsePackage String
+    | CompareVersion String
+    | RawEvent Layout.RawEvent
+    | DocsPaneScrolled Int
+    | OpenHelp
+    | ToggleDiffView
+    | SwitchToModulesTab
+    | SwitchToChangesTab
+    | SwitchToVersionsTab
+    | Quit
     | GotDiff (Maybe ApiDiff)
-    | Tick
     | GotPackageDocs String (Result FatalError (List Docs.Module))
+    | OpenPackagePicker
 
 
-init :
-    { modules : List Docs.Module
-    , diff : Maybe ApiDiff
-    , versions : List String
-    , loadDiff : String -> BackendTask FatalError (Maybe ApiDiff)
-    , dependencies : List String
-    , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
-    , readme : Maybe String
+appConfig :
+    { init : InitData -> ( Model, Effect.Effect Msg )
+    , update : Layout.UpdateContext -> Msg -> Model -> ( Model, Effect.Effect Msg )
+    , view : Tui.Context -> Model -> Layout.Layout Msg
+    , bindings : { focusedPane : Maybe String } -> Model -> List (Layout.Group Msg)
+    , status : Model -> { waiting : Maybe String }
+    , modal : Model -> Maybe (Layout.Modal Msg)
+    , onRawEvent : Maybe (Layout.RawEvent -> Msg)
     }
-    -> ( Model, Effect.Effect Msg )
-init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme } =
-    ( { layout =
-            Layout.init
-                |> Layout.focusPane "modules"
-      , modules = modules
+appConfig =
+    { init = init
+    , update = update
+    , view = viewLayout
+    , bindings = bindings
+    , status = statusConfig
+    , modal = modalConfig
+    , onRawEvent = Just RawEvent
+    }
+
+
+statusConfig : Model -> { waiting : Maybe String }
+statusConfig model =
+    { waiting =
+        if model.loadingDiff then
+            Just "Loading..."
+
+        else
+            Nothing
+    }
+
+
+modalConfig : Model -> Maybe (Layout.Modal Msg)
+modalConfig model =
+    case model.modal of
+        Just HelpView ->
+            Just (Layout.helpModal CloseModal)
+
+        Just PackagePickerModal ->
+            Just
+                (Layout.pickerModal
+                    { items = model.dependencies
+                    , toString = identity
+                    , title = "Browse Package"
+                    , onSelect = \pkg -> BrowsePackage pkg
+                    , onCancel = CloseModal
+                    }
+                )
+
+        Just (ComparePickerModal baseVersion) ->
+            Just
+                (Layout.pickerModal
+                    { items = "HEAD" :: List.filter (\v -> v /= baseVersion) model.versions
+                    , toString = identity
+                    , title = "Compare " ++ baseVersion ++ " against"
+                    , onSelect = \v -> CompareVersion v
+                    , onCancel = CloseModal
+                    }
+                )
+
+        Nothing ->
+            Nothing
+
+
+init : InitData -> ( Model, Effect.Effect Msg )
+init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme, packageVersion } =
+    ( { modules = modules
       , diff = diff
       , rightView = DocsView
-      , showHelp = False
       , activeLeftTab = ModulesTab
-      -- filterInput removed
       , versions = versions
       , loadDiff = loadDiff
       , selectedModuleName =
@@ -120,20 +183,19 @@ init { modules, diff, versions, loadDiff, dependencies, loadPackageDocs, readme 
                 |> Maybe.withDefault ""
       , loadingDiff = False
       , diffVersion = Nothing
-      , spinnerTick = 0
-      , status = Status.init
       , cachedDocsContent = Nothing
       , cachedRightPane = Nothing
       , itemLinePositions = []
       , internalLinks = []
       , preRenderedModules = Dict.empty
+      , selectedItemIndex = 0
       , dependencies = dependencies
       , loadPackageDocs = loadPackageDocs
       , readme = readme
-      , packagePicker = Nothing
-      , comparePicker = Nothing
+      , modal = Nothing
       , browsingPackage = Nothing
       , homeModules = modules
+      , packageVersion = packageVersion
       }
     , Effect.none
     )
@@ -195,10 +257,27 @@ changedModuleNames diff =
     readmeEntry ++ allChangedNames
 
 
-selectedEntryName : Model -> Maybe String
-selectedEntryName model =
+selectedEntryName : Layout.UpdateContext -> Model -> Maybe String
+selectedEntryName ctx model =
     if String.isEmpty model.selectedModuleName then
-        Layout.selectedItem "modules" (visibleEntries model) (viewLayout (Layout.contextOf model.layout) model) model.layout
+        Layout.selectedItem "modules" (visibleEntries model) (viewLayout ctx.context model) (layoutStateFromCtx ctx)
+
+    else
+        Just model.selectedModuleName
+
+
+{-| Build a minimal Layout.State from UpdateContext for selectedItem lookups.
+-}
+layoutStateFromCtx : Layout.UpdateContext -> Layout.State
+layoutStateFromCtx ctx =
+    Layout.init
+        |> Layout.withContext ctx.context
+
+
+selectedEntryNameFromModel : Model -> Maybe String
+selectedEntryNameFromModel model =
+    if String.isEmpty model.selectedModuleName then
+        Nothing
 
     else
         Just model.selectedModuleName
@@ -206,7 +285,7 @@ selectedEntryName model =
 
 selectedModule : Model -> Maybe Docs.Module
 selectedModule model =
-    case selectedEntryName model of
+    case selectedEntryNameFromModel model of
         Just name ->
             findModule name model.modules
 
@@ -214,196 +293,234 @@ selectedModule model =
             Nothing
 
 
-handleKeyPressed : Tui.KeyEvent -> Model -> ( Model, Effect.Effect Msg )
-handleKeyPressed event model =
-    -- Pickers get first priority — all keys go to them
-    case model.comparePicker of
-                Just { baseVersion, picker } ->
-                    case event.key of
-                        Tui.Escape ->
-                            ( { model | comparePicker = Nothing }, Effect.none )
+bindings : { focusedPane : Maybe String } -> Model -> List (Layout.Group Msg)
+bindings { focusedPane } model =
+    let
+        hasDiff =
+            model.diff /= Nothing
 
-                        Tui.Enter ->
-                            case Tui.Picker.selected picker of
-                                Just targetVersion ->
-                                    let
-                                        ( olderVersion, newerVersion ) =
-                                            orderVersions baseVersion targetVersion
+        hasVersions =
+            not (List.isEmpty model.versions)
 
-                                        diffLabel =
-                                            olderVersion ++ " → " ++ newerVersion
-                                    in
-                                    ( { model
-                                        | comparePicker = Nothing
-                                        , loadingDiff = True
-                                        , diffVersion = Just diffLabel
-                                        , status = Status.toast ("Loading diff " ++ diffLabel ++ "...") model.status
-                                      }
-                                    , Effect.perform GotDiff (model.loadDiff olderVersion)
-                                    )
+        diffToggleBinding =
+            [ Layout.charBinding 'd' "Toggle diff view" ToggleDiffView ]
 
-                                Nothing ->
-                                    ( { model | comparePicker = Nothing }, Effect.none )
+        changesTabBinding =
+            if hasDiff || hasVersions then
+                [ Layout.charBinding 'c' "Changes" SwitchToChangesTab ]
 
-                        Tui.Arrow Tui.Down ->
-                            ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.navigateDown picker } }, Effect.none )
+            else
+                []
 
-                        Tui.Arrow Tui.Up ->
-                            ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.navigateUp picker } }, Effect.none )
+        versionsTabBinding =
+            if hasVersions then
+                [ Layout.charBinding 'v' "Versions" SwitchToVersionsTab ]
 
-                        Tui.Backspace ->
-                            ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.backspace picker } }, Effect.none )
+            else
+                []
 
-                        Tui.Character c ->
-                            if c == ' ' then
-                                ( model, Effect.none )
+        packagePickerBinding =
+            if not (List.isEmpty model.dependencies) then
+                [ Layout.charBinding 'p' "Browse package" OpenPackagePicker ]
 
-                            else
-                                ( { model | comparePicker = Just { baseVersion = baseVersion, picker = Tui.Picker.typeChar c picker } }, Effect.none )
+            else
+                []
 
-                        _ ->
-                            ( model, Effect.none )
-
-                Nothing ->
-                    case model.packagePicker of
-                        Just picker ->
-                            case event.key of
-                                Tui.Escape ->
-                                    ( { model | packagePicker = Nothing }, Effect.none )
-
-                                Tui.Enter ->
-                                    case Tui.Picker.selected picker of
-                                        Just packageName ->
-                                            ( { model
-                                                | packagePicker = Nothing
-                                                , loadingDiff = True
-                                                , status = Status.toast ("Loading " ++ packageName ++ "...") model.status
-                                              }
-                                            , Effect.attempt (GotPackageDocs packageName) (model.loadPackageDocs packageName)
-                                            )
-
-                                        Nothing ->
-                                            ( { model | packagePicker = Nothing }, Effect.none )
-
-                                Tui.Arrow Tui.Down ->
-                                    ( { model | packagePicker = Just (Tui.Picker.navigateDown picker) }, Effect.none )
-
-                                Tui.Arrow Tui.Up ->
-                                    ( { model | packagePicker = Just (Tui.Picker.navigateUp picker) }, Effect.none )
-
-                                Tui.Backspace ->
-                                    ( { model | packagePicker = Just (Tui.Picker.backspace picker) }, Effect.none )
-
-                                Tui.Character c ->
-                                    if c == ' ' then
-                                        ( model, Effect.none )
-
-                                    else
-                                        ( { model | packagePicker = Just (Tui.Picker.typeChar c picker) }, Effect.none )
-
-                                _ ->
-                                    ( model, Effect.none )
-
-                        Nothing ->
-                            -- Let the framework handle number keys, /, search etc.
-                            case Layout.handleKeyEvent event (viewLayout (Layout.contextOf model.layout) model) model.layout of
-                                ( newLayout, Just subMsg, _ ) ->
-                                    update subMsg { model | layout = newLayout }
-
-                                ( newLayout, Nothing, True ) ->
-                                    ( { model | layout = newLayout }, Effect.none )
-
-                                ( _, _, False ) ->
-                                    case Keybinding.dispatch (allBindings model) event of
-                                        Just action ->
-                                            handleAction action model
-
-                                        Nothing ->
-                                            ( model, Effect.none )
+        versionEnterBinding =
+            []
+    in
+    [ Layout.group "Global"
+        ([ Layout.charBinding 'q' "Quit" Quit
+         , Layout.charBinding '?' "Toggle help" OpenHelp
+         , Layout.charBinding 'h' "Focus left" (focusLeftMsg focusedPane)
+         , Layout.charBinding 'l' "Focus right" (focusRightMsg focusedPane)
+         ]
+            ++ diffToggleBinding
+            ++ changesTabBinding
+            ++ versionsTabBinding
+            ++ packagePickerBinding
+            ++ versionEnterBinding
+        )
+    ]
 
 
-update : Msg -> Model -> ( Model, Effect.Effect Msg )
-update msg model =
+
+
+focusLeftMsg : Maybe String -> Msg
+focusLeftMsg _ =
+    -- This is handled by the RawEvent path for now
+    -- But bindings produce direct messages, so we use a placeholder
+    RawEvent (Layout.UnhandledKey { key = Tui.Character 'h', modifiers = [] })
+
+
+focusRightMsg : Maybe String -> Msg
+focusRightMsg _ =
+    RawEvent (Layout.UnhandledKey { key = Tui.Character 'l', modifiers = [] })
+
+
+update : Layout.UpdateContext -> Msg -> Model -> ( Model, Effect.Effect Msg )
+update ctx msg model =
     case msg of
-        KeyPressed event ->
-            handleKeyPressed event model
-
-        MouseEvent mouseEvent ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                ( newLayout, maybeMsg ) =
-                    Layout.handleMouse mouseEvent ctx (viewLayout ctx model) model.layout
-            in
-            case maybeMsg of
-                Just subMsg ->
-                    update subMsg { model | layout = newLayout }
-
-                Nothing ->
-                    let
-                        updatedModel =
-                            { model | layout = newLayout }
-                    in
-                    -- Check for clicks on internal links in the docs pane
-                    case handleDocsPaneClick mouseEvent updatedModel of
-                        Just result ->
-                            result
-
-                        Nothing ->
-                            ( updatedModel
-                                |> syncItemsToScroll
-                            , Effect.none
-                            )
-
-        SelectEntry idx ->
-            let
-                entryName =
-                    visibleEntries model
-                        |> List.drop idx
-                        |> List.head
-                        |> Maybe.withDefault ""
-            in
+        SelectModule name ->
             ( { model
-                | layout =
-                    model.layout
-                        |> Layout.resetScroll "docs"
-                        |> Layout.setSelectedIndex "items" 0
-                , selectedModuleName = entryName
+                | selectedModuleName = name
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
+                , selectedItemIndex = 0
               }
-                |> refreshRightPaneCache
-            , Effect.none
+                |> refreshRightPaneCache ctx.context
+            , Effect.batch [ Effect.resetScroll "docs", Effect.setSelectedIndex "items" 0 ]
             )
 
-        SelectItem idx ->
+        SelectItemByName name ->
             let
                 scrollTarget =
                     model.itemLinePositions
-                        |> List.drop idx
+                        |> List.filter (\( itemName, _ ) -> itemName == name)
                         |> List.head
                         |> Maybe.map Tuple.second
                         |> Maybe.withDefault 0
 
-                newLayout =
-                    model.layout
-                        |> Layout.resetScroll "docs"
-                        |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
+                items =
+                    itemsForCurrentView model
+
+                newIdx =
+                    items
+                        |> List.indexedMap Tuple.pair
+                        |> List.filter (\( _, item ) -> item == name)
+                        |> List.head
+                        |> Maybe.map Tuple.first
+                        |> Maybe.withDefault model.selectedItemIndex
             in
-            ( { model | layout = newLayout }
+            ( { model | selectedItemIndex = newIdx }
+            , Effect.batch [ Effect.resetScroll "docs", Effect.scrollDown "docs" (max 0 (scrollTarget - 2)) ]
+            )
+
+        CloseModal ->
+            ( { model | modal = Nothing }, Effect.none )
+
+        BrowsePackage packageName ->
+            ( { model
+                | modal = Nothing
+                , loadingDiff = True
+              }
+            , Effect.batch
+                [ Effect.toast ("Loading " ++ packageName ++ "...")
+                , Effect.attempt (GotPackageDocs packageName) (model.loadPackageDocs packageName)
+                ]
+            )
+
+        CompareVersion targetVersion ->
+            case model.modal of
+                Just (ComparePickerModal baseVersion) ->
+                    let
+                        ( olderVersion, newerVersion ) =
+                            orderVersions baseVersion targetVersion
+
+                        diffLabel =
+                            olderVersion ++ " -> " ++ newerVersion
+                    in
+                    ( { model
+                        | modal = Nothing
+                        , loadingDiff = True
+                        , diffVersion = Just diffLabel
+                      }
+                    , Effect.batch
+                        [ Effect.toast ("Loading diff " ++ diffLabel ++ "...")
+                        , Effect.perform GotDiff (model.loadDiff olderVersion)
+                        ]
+                    )
+
+                _ ->
+                    ( { model | modal = Nothing }, Effect.none )
+
+        RawEvent rawEvent ->
+            handleRawEvent ctx rawEvent model
+
+        DocsPaneScrolled scrollOffset ->
+            let
+                newModel =
+                    syncItemsToScrollAt scrollOffset model
+            in
+            ( newModel
+            , Effect.setSelectedIndex "items" newModel.selectedItemIndex
+            )
+
+        OpenHelp ->
+            case model.modal of
+                Just HelpView ->
+                    ( { model | modal = Nothing }, Effect.none )
+
+                _ ->
+                    ( { model | modal = Just HelpView }, Effect.none )
+
+        ToggleDiffView ->
+            handleToggleDiffView ctx model
+
+        SwitchToModulesTab ->
+            let
+                modulesModel =
+                    { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
+
+                firstEntry =
+                    visibleEntries modulesModel
+                        |> List.head
+                        |> Maybe.withDefault ""
+            in
+            ( { modulesModel | selectedModuleName = firstEntry }
+                |> refreshRightPaneCache ctx.context
             , Effect.none
             )
 
-        GotContext ctx ->
-            ( { model
-                | layout =
-                    Layout.withContext ctx model.layout
-                , cachedRightPane = Nothing
-              }
-                |> refreshRightPaneCache
-            , Effect.none
-            )
+        SwitchToChangesTab ->
+            case model.diff of
+                Just _ ->
+                    let
+                        changesModel =
+                            { model | activeLeftTab = ChangesTab, rightView = DiffView, cachedRightPane = Nothing }
+
+                        firstEntry =
+                            visibleEntries changesModel
+                                |> List.head
+                                |> Maybe.withDefault ""
+                    in
+                    ( { changesModel | selectedModuleName = firstEntry }
+                        |> refreshRightPaneCache ctx.context
+                    , Effect.none
+                    )
+
+                Nothing ->
+                    case model.versions of
+                        firstVersion :: _ ->
+                            if model.loadingDiff then
+                                ( { model | activeLeftTab = ChangesTab, rightView = DiffView }, Effect.none )
+
+                            else
+                                ( { model
+                                    | activeLeftTab = ChangesTab
+                                    , rightView = DiffView
+                                    , loadingDiff = True
+                                    , diffVersion = Just firstVersion
+                                  }
+                                , Effect.perform GotDiff (model.loadDiff firstVersion)
+                                )
+
+                        [] ->
+                            ( model, Effect.none )
+
+        SwitchToVersionsTab ->
+            if List.isEmpty model.versions then
+                ( model, Effect.none )
+
+            else
+                let
+                    firstVersion =
+                        model.versions |> List.head |> Maybe.withDefault ""
+                in
+                ( { model | activeLeftTab = VersionsTab, selectedModuleName = firstVersion }, Effect.none )
+
+        Quit ->
+            ( model, Effect.exit )
 
         GotDiff maybeDiff ->
             let
@@ -432,16 +549,12 @@ update msg model =
 
                         Nothing ->
                             model.activeLeftTab
-                , status = Status.toast toastMessage model.status
                 , cachedDocsContent = Nothing
                 , cachedRightPane = Nothing
               }
-                |> refreshRightPaneCache
-            , Effect.none
+                |> refreshRightPaneCache ctx.context
+            , Effect.toast toastMessage
             )
-
-        Tick ->
-            ( { model | spinnerTick = model.spinnerTick + 1, status = Status.tick model.status }, Effect.none )
 
         GotPackageDocs packageName result ->
             case result of
@@ -458,114 +571,305 @@ update msg model =
                         , cachedRightPane = Nothing
                         , preRenderedModules =
                             preRenderAllModules
-                                (docsPaneWidth (Layout.contextOf model.layout) - 2)
+                                (docsPaneWidth ctx.context - 2)
                                 newModules
-                        , status = Status.toast ("Browsing " ++ packageName) model.status
                       }
-                        |> refreshRightPaneCache
-                    , Effect.none
+                        |> refreshRightPaneCache ctx.context
+                    , Effect.toast ("Browsing " ++ packageName)
                     )
 
                 Err _ ->
-                    ( { model
-                        | loadingDiff = False
-                        , status = Status.errorToast ("Failed to load " ++ packageName) model.status
-                      }
-                    , Effect.none
+                    ( { model | loadingDiff = False }
+                    , Effect.errorToast ("Failed to load " ++ packageName)
                     )
 
-
-type Action
-    = Quit
-    | NavigateDown
-    | NavigateUp
-    | FocusModules
-    | FocusItems
-    | FocusDocs
-    | FocusLeft
-    | FocusRight
-    | ScrollDocsDown
-    | ScrollDocsUp
-    | ToggleHelp
-    | CloseHelp
-    | ToggleDiffView
-    | SwitchToModulesTab
-    | SwitchToChangesTab
-    | SwitchToVersionsTab
-    | CycleLeftTab
-    | ActivateFilter
-    | CancelFilter
-    | LoadDiffForVersion
-    | PageDown
-    | PageUp
-    | ScrollDocsPageDown
-    | ScrollDocsPageUp
-    | ToggleMaximize
-    | CyclePaneFocus
-    | CyclePaneFocusReverse
-    | ScrollToSelectedItem
-    | OpenPackagePicker
-    | FollowLink
-
-
-handleDocsPaneClick : Tui.MouseEvent -> Model -> Maybe ( Model, Effect.Effect Msg )
-handleDocsPaneClick mouseEvent model =
-    case mouseEvent of
-        Tui.Click { row, col } ->
-            let
-                scrollOffset =
-                    Layout.scrollPosition "docs" model.layout
-
-                contentLine =
-                    row - 1 + scrollOffset
-
-                -- Get the clicked line text from cached content or current content
-                clickedLineText =
-                    case model.cachedRightPane of
-                        Just cached ->
-                            cached.lines
-                                |> List.drop contentLine
-                                |> List.head
-                                |> Maybe.map Tui.toString
-                                |> Maybe.withDefault ""
-
-                        Nothing ->
-                            ""
-
-                -- Find internal links from ALL comments in the current module
-                links =
-                    case selectedModule model of
-                        Just mod ->
-                            extractLinksFromComment mod.comment
-                                ++ List.concatMap (.comment >> extractLinksFromComment) mod.values
-                                ++ List.concatMap (.comment >> extractLinksFromComment) mod.unions
-                                ++ List.concatMap (.comment >> extractLinksFromComment) mod.aliases
-
-                        Nothing ->
-                            []
-
-                matchingLink =
-                    links
-                        |> List.filter (\link -> String.contains link.text clickedLineText)
-                        |> List.head
-            in
-            if row > 0 && not (String.isEmpty clickedLineText) then
-                case matchingLink of
-                    Just link ->
-                        Just (navigateToLink link.destination model)
-
-                    Nothing ->
-                        Nothing
+        OpenPackagePicker ->
+            if List.isEmpty model.dependencies then
+                ( model, Effect.none )
 
             else
+                ( { model | modal = Just PackagePickerModal }
+                , Effect.none
+                )
+
+
+handleToggleDiffView : Layout.UpdateContext -> Model -> ( Model, Effect.Effect Msg )
+handleToggleDiffView ctx model =
+    if model.loadingDiff then
+        ( model, Effect.none )
+
+    else if model.activeLeftTab == VersionsTab then
+        -- On versions tab: open compare-against picker
+        case selectedEntryName ctx model of
+            Just name ->
+                ( { model | modal = Just (ComparePickerModal name) }
+                , Effect.none
+                )
+
+            _ ->
+                -- Also handle as version loading when on versions tab
+                case selectedEntryNameFromModel model of
+                    Just name ->
+                        ( { model | loadingDiff = True, diffVersion = Just name }
+                        , Effect.perform GotDiff (model.loadDiff name)
+                        )
+
+                    Nothing ->
+                        ( model, Effect.none )
+
+    else
+        case model.diff of
+            Just _ ->
+                let
+                    ( newView, newTab ) =
+                        case model.rightView of
+                            DocsView ->
+                                ( DiffView, ChangesTab )
+
+                            DiffView ->
+                                ( DocsView, ModulesTab )
+                in
+                ( { model
+                    | rightView = newView
+                    , activeLeftTab = newTab
+                    , cachedRightPane = Nothing
+                  }
+                    |> refreshRightPaneCache ctx.context
+                , Effect.none
+                )
+
+            Nothing ->
+                case model.versions of
+                    firstVersion :: _ ->
+                        ( { model | loadingDiff = True, diffVersion = Just firstVersion }
+                        , Effect.perform GotDiff (model.loadDiff firstVersion)
+                        )
+
+                    [] ->
+                        -- No versions from git tags — diff against published version
+                        case model.packageVersion of
+                            Just version ->
+                                ( { model | loadingDiff = True, diffVersion = Just version }
+                                , Effect.perform GotDiff (model.loadDiff version)
+                                )
+
+                            Nothing ->
+                                ( model, Effect.none )
+
+
+handleRawEvent : Layout.UpdateContext -> Layout.RawEvent -> Model -> ( Model, Effect.Effect Msg )
+handleRawEvent ctx rawEvent model =
+    case rawEvent of
+        Layout.UnhandledKey keyEvent ->
+            case keyEvent.key of
+                Tui.Character 'h' ->
+                    let
+                        newPane =
+                            case ctx.focusedPane of
+                                Just "docs" ->
+                                    "items"
+
+                                Just "items" ->
+                                    "modules"
+
+                                _ ->
+                                    "modules"
+                    in
+                    ( model, Effect.focusPane newPane )
+
+                Tui.Character 'l' ->
+                    let
+                        newPane =
+                            case ctx.focusedPane of
+                                Just "modules" ->
+                                    "items"
+
+                                Just "items" ->
+                                    "docs"
+
+                                _ ->
+                                    "docs"
+                    in
+                    ( model, Effect.focusPane newPane )
+
+                Tui.Escape ->
+                    ( model, Effect.exit )
+
+                Tui.Enter ->
+                    -- Handle Enter for various contexts
+                    case ctx.focusedPane of
+                        Just "modules" ->
+                            if model.activeLeftTab == VersionsTab then
+                                -- Load diff for selected version
+                                if model.loadingDiff then
+                                    ( model, Effect.none )
+
+                                else
+                                    case selectedEntryName ctx model of
+                                        Just name ->
+                                            ( { model | loadingDiff = True, diffVersion = Just name }
+                                            , Effect.perform GotDiff (model.loadDiff name)
+                                            )
+
+                                        _ ->
+                                            ( model, Effect.none )
+
+                            else
+                                ( model, Effect.focusPane "docs" )
+
+                        Just "items" ->
+                            -- Jump to selected item in docs
+                            let
+                                items =
+                                    itemsForCurrentView model
+
+                                selectedIdx =
+                                    ctx.selectedIndex "items"
+
+                                maybeItemName =
+                                    items |> List.drop selectedIdx |> List.head
+
+                                docsContent =
+                                    currentDocsContent ctx model
+
+                                scrollTarget =
+                                    case maybeItemName of
+                                        Just itemName ->
+                                            findLineForItem itemName docsContent
+
+                                        Nothing ->
+                                            0
+                            in
+                            ( model
+                            , Effect.batch [ Effect.resetScroll "docs", Effect.scrollDown "docs" (max 0 (scrollTarget - 2)) ]
+                            )
+
+                        Just "docs" ->
+                            -- Follow link
+                            handleFollowLink ctx model
+
+                        _ ->
+                            ( model, Effect.none )
+
+                _ ->
+                    ( model, Effect.none )
+
+        Layout.Click { row, col } ->
+            -- Handle clicks on internal links in the docs pane
+            case handleDocsPaneClick ctx row model of
+                Just result ->
+                    result
+
+                Nothing ->
+                    ( model, Effect.none )
+
+        Layout.Scroll _ ->
+            ( model, Effect.none )
+
+
+handleFollowLink : Layout.UpdateContext -> Model -> ( Model, Effect.Effect Msg )
+handleFollowLink ctx model =
+    let
+        scrollOffset =
+            ctx.scrollPosition "docs"
+
+        visibleTop =
+            scrollOffset
+
+        visibleBottom =
+            scrollOffset + ctx.context.height - 4
+
+        links =
+            case selectedModule model of
+                Just mod ->
+                    let
+                        rawLinks =
+                            extractLinksFromComment mod.comment
+
+                        docsContent =
+                            currentDocsContent ctx model
+                    in
+                    rawLinks
+                        |> List.filterMap
+                            (\link ->
+                                let
+                                    linePos =
+                                        findLinkLine link.text docsContent
+                                in
+                                if linePos >= 0 then
+                                    Just { line = linePos, destination = link.destination, text = link.text }
+
+                                else
+                                    Nothing
+                            )
+
+                Nothing ->
+                    []
+
+        visibleLink =
+            links
+                |> List.filter (\link -> link.line >= visibleTop && link.line <= visibleBottom)
+                |> List.head
+    in
+    case visibleLink of
+        Just link ->
+            navigateToLink ctx link.destination model
+
+        Nothing ->
+            ( model, Effect.none )
+
+
+handleDocsPaneClick : Layout.UpdateContext -> Int -> Model -> Maybe ( Model, Effect.Effect Msg )
+handleDocsPaneClick ctx row model =
+    let
+        scrollOffset =
+            ctx.scrollPosition "docs"
+
+        contentLine =
+            row - 1 + scrollOffset
+
+        clickedLineText =
+            case model.cachedRightPane of
+                Just cached ->
+                    cached.lines
+                        |> List.drop contentLine
+                        |> List.head
+                        |> Maybe.map Tui.toString
+                        |> Maybe.withDefault ""
+
+                Nothing ->
+                    ""
+
+        links =
+            case selectedModule model of
+                Just mod ->
+                    extractLinksFromComment mod.comment
+                        ++ List.concatMap (.comment >> extractLinksFromComment) mod.values
+                        ++ List.concatMap (.comment >> extractLinksFromComment) mod.unions
+                        ++ List.concatMap (.comment >> extractLinksFromComment) mod.aliases
+
+                Nothing ->
+                    []
+
+        matchingLink =
+            links
+                |> List.filter (\link -> String.contains link.text clickedLineText)
+                |> List.head
+    in
+    if row > 0 && not (String.isEmpty clickedLineText) then
+        case matchingLink of
+            Just link ->
+                Just (navigateToLink ctx link.destination model)
+
+            Nothing ->
                 Nothing
 
-        _ ->
-            Nothing
+    else
+        Nothing
 
 
-navigateToLink : String -> Model -> ( Model, Effect.Effect Msg )
-navigateToLink destination model =
+navigateToLink : Layout.UpdateContext -> String -> Model -> ( Model, Effect.Effect Msg )
+navigateToLink ctx destination model =
     let
         ( targetModule, targetItem ) =
             if String.startsWith "#" destination then
@@ -600,18 +904,13 @@ navigateToLink destination model =
                     let
                         newModel =
                             { model
-                                | layout =
-                                    model.layout
-                                        |> Layout.setSelectedIndex "modules" idx
-                                        |> Layout.resetScroll "docs"
-                                        |> Layout.setSelectedIndex "items" 0
-                                , selectedModuleName = moduleName
+                                | selectedModuleName = moduleName
                                 , cachedDocsContent = Nothing
                                 , cachedRightPane = Nothing
                             }
-                                |> refreshRightPaneCache
+                                |> refreshRightPaneCache ctx.context
 
-                        finalModel =
+                        scrollEffect =
                             case targetItem of
                                 Just item ->
                                     let
@@ -622,24 +921,27 @@ navigateToLink destination model =
                                                 |> Maybe.map Tuple.second
                                                 |> Maybe.withDefault 0
                                     in
-                                    { newModel
-                                        | layout =
-                                            newModel.layout
-                                                |> Layout.resetScroll "docs"
-                                                |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
-                                    }
+                                    Effect.batch
+                                        [ Effect.setSelectedIndex "modules" idx
+                                        , Effect.resetScroll "docs"
+                                        , Effect.scrollDown "docs" (max 0 (scrollTarget - 2))
+                                        , Effect.setSelectedIndex "items" 0
+                                        , Effect.toast ("-> " ++ moduleName)
+                                        ]
 
                                 Nothing ->
-                                    newModel
+                                    Effect.batch
+                                        [ Effect.setSelectedIndex "modules" idx
+                                        , Effect.resetScroll "docs"
+                                        , Effect.setSelectedIndex "items" 0
+                                        , Effect.toast ("-> " ++ moduleName)
+                                        ]
                     in
-                    ( finalModel
-                        |> (\m -> { m | status = Status.toast ("→ " ++ moduleName) m.status })
-                    , Effect.none
-                    )
+                    ( newModel, scrollEffect )
 
                 Nothing ->
-                    ( { model | status = Status.errorToast ("Module " ++ moduleName ++ " not found") model.status }
-                    , Effect.none
+                    ( model
+                    , Effect.errorToast ("Module " ++ moduleName ++ " not found")
                     )
 
         Nothing ->
@@ -653,900 +955,25 @@ navigateToLink destination model =
                                 |> Maybe.map Tuple.second
                                 |> Maybe.withDefault 0
                     in
-                    ( { model
-                        | layout =
-                            model.layout
-                                |> Layout.resetScroll "docs"
-                                |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
-                      }
-                    , Effect.none
+                    ( model
+                    , Effect.batch [ Effect.resetScroll "docs", Effect.scrollDown "docs" (max 0 (scrollTarget - 2)) ]
                     )
 
                 Nothing ->
                     ( model, Effect.none )
-
-
-handleAction : Action -> Model -> ( Model, Effect.Effect Msg )
-handleAction action model =
-    case action of
-        Quit ->
-            if Layout.isMaximized "docs" model.layout then
-                ( { model | layout = Layout.toggleMaximize "docs" model.layout }
-                , Effect.none
-                )
-
-            else
-                ( model, Effect.exit )
-
-        NavigateDown ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                paneId =
-                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
-
-                ( newLayout, maybeMsg ) =
-                    Layout.navigateDown paneId (viewLayout ctx model) model.layout
-            in
-            case maybeMsg of
-                Just subMsg ->
-                    update subMsg { model | layout = newLayout }
-
-                Nothing ->
-                    ( { model | layout = newLayout }
-                    , Effect.none
-                    )
-
-        NavigateUp ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                paneId =
-                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
-
-                ( newLayout, maybeMsg ) =
-                    Layout.navigateUp paneId (viewLayout ctx model) model.layout
-            in
-            case maybeMsg of
-                Just subMsg ->
-                    update subMsg { model | layout = newLayout }
-
-                Nothing ->
-                    ( { model | layout = newLayout }
-                    , Effect.none
-                    )
-
-        FocusModules ->
-            ( { model | layout = Layout.focusPane "modules" model.layout }
-            , Effect.none
-            )
-
-        FocusItems ->
-            ( { model | layout = Layout.focusPane "items" model.layout }
-            , Effect.none
-            )
-
-        FocusDocs ->
-            ( { model | layout = Layout.focusPane "docs" model.layout }
-            , Effect.none
-            )
-
-        FocusLeft ->
-            let
-                newPane =
-                    case Layout.focusedPane model.layout of
-                        Just "docs" ->
-                            "items"
-
-                        Just "items" ->
-                            "modules"
-
-                        _ ->
-                            "modules"
-            in
-            ( { model | layout = Layout.focusPane newPane model.layout }
-            , Effect.none
-            )
-
-        FocusRight ->
-            let
-                newPane =
-                    case Layout.focusedPane model.layout of
-                        Just "modules" ->
-                            "items"
-
-                        Just "items" ->
-                            "docs"
-
-                        _ ->
-                            "docs"
-            in
-            ( { model | layout = Layout.focusPane newPane model.layout }
-            , Effect.none
-            )
-
-        ScrollDocsDown ->
-            ( { model | layout = cappedScrollDown model 3 }
-                |> syncItemsToScroll
-            , Effect.none
-            )
-
-        ScrollDocsUp ->
-            ( { model | layout = Layout.scrollUp "docs" 3 model.layout }
-                |> syncItemsToScroll
-            , Effect.none
-            )
-
-        ToggleHelp ->
-            ( { model | showHelp = not model.showHelp }, Effect.none )
-
-        CloseHelp ->
-            ( { model | showHelp = False }, Effect.none )
-
-        ToggleDiffView ->
-            if model.loadingDiff then
-                ( model, Effect.none )
-
-            else if model.activeLeftTab == VersionsTab then
-                -- On versions tab: open compare-against picker
-                case selectedEntryName model of
-                    Just name ->
-                        let
-                            otherVersions =
-                                "HEAD"
-                                    :: List.filter (\v -> v /= name) model.versions
-
-                            picker =
-                                Tui.Picker.open
-                                    { items = otherVersions
-                                    , toString = identity
-                                    , title = "Compare " ++ name ++ " against"
-                                    }
-                        in
-                        ( { model | comparePicker = Just { baseVersion = name, picker = picker } }
-                        , Effect.none
-                        )
-
-                    _ ->
-                        ( model, Effect.none )
-
-            else
-                case model.diff of
-                    Just _ ->
-                        let
-                            ( newView, newTab ) =
-                                case model.rightView of
-                                    DocsView ->
-                                        ( DiffView, ChangesTab )
-
-                                    DiffView ->
-                                        ( DocsView, ModulesTab )
-                        in
-                        ( { model
-                            | rightView = newView
-                            , activeLeftTab = newTab
-                            , cachedRightPane = Nothing
-                          }
-                            |> refreshRightPaneCache
-                        , Effect.none
-                        )
-
-                    Nothing ->
-                        case model.versions of
-                            firstVersion :: _ ->
-                                ( { model | loadingDiff = True, diffVersion = Just firstVersion }
-                                , Effect.perform GotDiff (model.loadDiff firstVersion)
-                                )
-
-                            [] ->
-                                ( model, Effect.none )
-
-        SwitchToModulesTab ->
-            let
-                modulesModel =
-                    { model | activeLeftTab = ModulesTab, rightView = DocsView, cachedRightPane = Nothing }
-
-                firstEntry =
-                    visibleEntries modulesModel
-                        |> List.head
-                        |> Maybe.withDefault ""
-            in
-            ( { modulesModel | selectedModuleName = firstEntry }
-                |> refreshRightPaneCache
-            , Effect.none
-            )
-
-        SwitchToChangesTab ->
-            case model.diff of
-                Just _ ->
-                    let
-                        changesModel =
-                            { model | activeLeftTab = ChangesTab, rightView = DiffView, cachedRightPane = Nothing }
-
-                        firstEntry =
-                            visibleEntries changesModel
-                                |> List.head
-                                |> Maybe.withDefault ""
-                    in
-                    ( { changesModel | selectedModuleName = firstEntry }
-                        |> refreshRightPaneCache
-                    , Effect.none
-                    )
-
-                Nothing ->
-                    case model.versions of
-                        firstVersion :: _ ->
-                            if model.loadingDiff then
-                                ( { model | activeLeftTab = ChangesTab, rightView = DiffView }, Effect.none )
-
-                            else
-                                ( { model
-                                    | activeLeftTab = ChangesTab
-                                    , rightView = DiffView
-                                    , loadingDiff = True
-                                    , diffVersion = Just firstVersion
-                                  }
-                                , Effect.perform GotDiff (model.loadDiff firstVersion)
-                                )
-
-                        [] ->
-                            ( model, Effect.none )
-
-        CycleLeftTab ->
-            let
-                hasChangesTab =
-                    model.diff /= Nothing || not (List.isEmpty model.versions)
-
-                hasVersionsTab =
-                    not (List.isEmpty model.versions)
-
-                nextTab =
-                    case model.activeLeftTab of
-                        ModulesTab ->
-                            if hasChangesTab then
-                                ChangesTab
-
-                            else if hasVersionsTab then
-                                VersionsTab
-
-                            else
-                                ModulesTab
-
-                        ChangesTab ->
-                            if hasVersionsTab then
-                                VersionsTab
-
-                            else
-                                ModulesTab
-
-                        VersionsTab ->
-                            ModulesTab
-            in
-            let
-                newRightView =
-                    case nextTab of
-                        ChangesTab ->
-                            DiffView
-
-                        _ ->
-                            DocsView
-            in
-            if nextTab == ChangesTab && model.diff == Nothing then
-                -- Need to load diff first
-                case model.versions of
-                    firstVersion :: _ ->
-                        if model.loadingDiff then
-                            ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
-
-                        else
-                            ( { model
-                                | activeLeftTab = nextTab
-                                , rightView = newRightView
-                                , loadingDiff = True
-                                , diffVersion = Just firstVersion
-                              }
-                            , Effect.perform GotDiff (model.loadDiff firstVersion)
-                            )
-
-                    [] ->
-                        ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
-
-            else
-                ( { model | activeLeftTab = nextTab, rightView = newRightView }, Effect.none )
-
-        ActivateFilter ->
-            ( model, Effect.none )
-
-        CancelFilter ->
-            ( model, Effect.none )
-
-        SwitchToVersionsTab ->
-            if List.isEmpty model.versions then
-                ( model, Effect.none )
-
-            else
-                let
-                    firstVersion =
-                        model.versions |> List.head |> Maybe.withDefault ""
-                in
-                ( { model | activeLeftTab = VersionsTab, selectedModuleName = firstVersion }, Effect.none )
-
-        LoadDiffForVersion ->
-            if model.loadingDiff then
-                ( model, Effect.none )
-
-            else
-                case selectedEntryName model of
-                    Just name ->
-                        ( { model | loadingDiff = True, diffVersion = Just name }
-                        , Effect.perform GotDiff (model.loadDiff name)
-                        )
-
-                    _ ->
-                        ( model, Effect.none )
-
-        PageDown ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                paneId =
-                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
-
-                pageSize =
-                    max 1 ((ctx.height - 4) // 2)
-
-                step i ( m, _ ) =
-                    if i <= 0 then
-                        ( m, Effect.none )
-
-                    else
-                        let
-                            ( newLayout, _ ) =
-                                Layout.navigateDown paneId (viewLayout ctx m) m.layout
-                        in
-                        step (i - 1) ( { m | layout = newLayout }, Effect.none )
-
-                ( pageModel, pageEffect ) =
-                    step pageSize ( model, Effect.none )
-
-                entries =
-                    visibleEntries pageModel
-
-                newSelectedName =
-                    if paneId == "modules" then
-                        Layout.selectedItem "modules" entries (viewLayout ctx pageModel) pageModel.layout
-                            |> Maybe.withDefault (entries |> List.head |> Maybe.withDefault pageModel.selectedModuleName)
-
-                    else
-                        pageModel.selectedModuleName
-            in
-            ( { pageModel
-                | selectedModuleName = newSelectedName
-                , cachedDocsContent = Nothing
-                , cachedRightPane = Nothing
-              }
-                |> refreshRightPaneCache
-            , pageEffect
-            )
-
-        PageUp ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                paneId =
-                    Layout.focusedPane model.layout |> Maybe.withDefault "modules"
-
-                pageSize =
-                    max 1 ((ctx.height - 4) // 2)
-
-                step i ( m, _ ) =
-                    if i <= 0 then
-                        ( m, Effect.none )
-
-                    else
-                        let
-                            ( newLayout, _ ) =
-                                Layout.navigateUp paneId (viewLayout ctx m) m.layout
-                        in
-                        step (i - 1) ( { m | layout = newLayout }, Effect.none )
-
-                ( pageModel, pageEffect ) =
-                    step pageSize ( model, Effect.none )
-
-                entries =
-                    visibleEntries pageModel
-
-                newSelectedName =
-                    if paneId == "modules" then
-                        Layout.selectedItem "modules" entries (viewLayout ctx pageModel) pageModel.layout
-                            |> Maybe.withDefault (entries |> List.head |> Maybe.withDefault pageModel.selectedModuleName)
-
-                    else
-                        pageModel.selectedModuleName
-            in
-            ( { pageModel
-                | selectedModuleName = newSelectedName
-                , cachedDocsContent = Nothing
-                , cachedRightPane = Nothing
-              }
-                |> refreshRightPaneCache
-            , pageEffect
-            )
-
-        ScrollDocsPageDown ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                pageSize =
-                    max 1 (ctx.height - 4)
-            in
-            ( { model | layout = cappedScrollDown model pageSize }
-                |> syncItemsToScroll
-            , Effect.none
-            )
-
-        ScrollDocsPageUp ->
-            let
-                ctx =
-                    Layout.contextOf model.layout
-
-                pageSize =
-                    max 1 (ctx.height - 4)
-            in
-            ( { model | layout = Layout.scrollUp "docs" pageSize model.layout }
-                |> syncItemsToScroll
-            , Effect.none
-            )
-
-        ToggleMaximize ->
-            ( { model | layout = Layout.toggleMaximize "docs" model.layout }
-            , Effect.none
-            )
-
-        ScrollToSelectedItem ->
-            let
-                items =
-                    itemsForCurrentView model
-
-                selectedIdx =
-                    Layout.selectedIndex "items" model.layout
-
-                maybeItemName =
-                    items |> List.drop selectedIdx |> List.head
-
-                docsContent =
-                    currentDocsContent model
-
-                scrollTarget =
-                    case maybeItemName of
-                        Just itemName ->
-                            findLineForItem itemName docsContent
-
-                        Nothing ->
-                            0
-
-                newLayout =
-                    model.layout
-                        |> Layout.resetScroll "docs"
-                        |> Layout.scrollDown "docs" (max 0 (scrollTarget - 2))
-            in
-            ( { model | layout = newLayout }
-            , Effect.none
-            )
-
-        CyclePaneFocus ->
-            let
-                nextPane =
-                    case Layout.focusedPane model.layout of
-                        Just "modules" ->
-                            "items"
-
-                        Just "items" ->
-                            "docs"
-
-                        Just "docs" ->
-                            "modules"
-
-                        _ ->
-                            "modules"
-            in
-            ( { model | layout = Layout.focusPane nextPane model.layout }
-            , Effect.none
-            )
-
-        FollowLink ->
-            let
-                scrollOffset =
-                    Layout.scrollPosition "docs" model.layout
-
-                ctx =
-                    Layout.contextOf model.layout
-
-                visibleTop =
-                    scrollOffset
-
-                visibleBottom =
-                    scrollOffset + ctx.height - 4
-
-                -- Extract links lazily (only when user presses Enter)
-                links =
-                    case selectedModule model of
-                        Just mod ->
-                            let
-                                rawLinks =
-                                    extractLinksFromComment mod.comment
-
-                                docsContent =
-                                    currentDocsContent model
-                            in
-                            rawLinks
-                                |> List.filterMap
-                                    (\link ->
-                                        let
-                                            linePos =
-                                                findLinkLine link.text docsContent
-                                        in
-                                        if linePos >= 0 then
-                                            Just { line = linePos, destination = link.destination, text = link.text }
-
-                                        else
-                                            Nothing
-                                    )
-
-                        Nothing ->
-                            []
-
-                visibleLink =
-                    links
-                        |> List.filter (\link -> link.line >= visibleTop && link.line <= visibleBottom)
-                        |> List.head
-            in
-            case visibleLink of
-                Just link ->
-                    navigateToLink link.destination model
-
-                Nothing ->
-                    ( model, Effect.none )
-
-        OpenPackagePicker ->
-            if List.isEmpty model.dependencies then
-                ( model, Effect.none )
-
-            else
-                ( { model
-                    | packagePicker =
-                        Just
-                            (Tui.Picker.open
-                                { items = model.dependencies
-                                , toString = identity
-                                , title = "Browse Package"
-                                }
-                            )
-                  }
-                , Effect.none
-                )
-
-        CyclePaneFocusReverse ->
-            let
-                prevPane =
-                    case Layout.focusedPane model.layout of
-                        Just "modules" ->
-                            "docs"
-
-                        Just "items" ->
-                            "modules"
-
-                        Just "docs" ->
-                            "items"
-
-                        _ ->
-                            "modules"
-            in
-            ( { model | layout = Layout.focusPane prevPane model.layout }
-            , Effect.none
-            )
-
-
-
--- KEYBINDINGS
-
-
-globalBindings : Model -> Keybinding.Group Action
-globalBindings model =
-    let
-        hasDiff =
-            model.diff /= Nothing
-
-        hasVersions =
-            not (List.isEmpty model.versions)
-
-        diffToggleBinding =
-            if hasDiff || hasVersions then
-                [ Keybinding.binding (Tui.Character 'd') "Toggle diff view" ToggleDiffView ]
-
-            else
-                []
-
-        changesTabBinding =
-            if hasDiff || hasVersions then
-                [ Keybinding.binding (Tui.Character 'c') "Changes" SwitchToChangesTab ]
-
-            else
-                []
-
-        versionsTabBinding =
-            if hasVersions then
-                [ Keybinding.binding (Tui.Character 'v') "Versions" SwitchToVersionsTab ]
-
-            else
-                []
-
-        cycleBinding =
-            [ Keybinding.binding Tui.Tab "Cycle panes" CyclePaneFocus
-            , Keybinding.withModifiers [ Tui.Shift ] Tui.Tab "Prev pane" CyclePaneFocusReverse
-            ]
-    in
-    Keybinding.group "Global"
-        ([ Keybinding.binding (Tui.Character 'q') "Quit" Quit
-         , Keybinding.binding Tui.Escape "Quit" Quit
-         , Keybinding.binding (Tui.Character '?') "Toggle help" ToggleHelp
-         , Keybinding.binding (Tui.Character 'h') "Focus left" FocusLeft
-             |> Keybinding.withAlternate (Tui.Arrow Tui.Left)
-         , Keybinding.binding (Tui.Character 'l') "Focus right" FocusRight
-             |> Keybinding.withAlternate (Tui.Arrow Tui.Right)
-         ]
-            ++ diffToggleBinding
-            ++ changesTabBinding
-            ++ versionsTabBinding
-            ++ cycleBinding
-            ++ (if not (List.isEmpty model.dependencies) then
-                    [ Keybinding.binding (Tui.Character 'p') "Browse package" OpenPackagePicker ]
-
-                else
-                    []
-               )
-        )
-
-
-helpBindings : Keybinding.Group Action
-helpBindings =
-    Keybinding.group "Help"
-        [ Keybinding.binding (Tui.Character '?') "Close help" ToggleHelp
-        , Keybinding.binding Tui.Escape "Close help" CloseHelp
-        , Keybinding.binding (Tui.Character 'q') "Quit" Quit
-        ]
-
-
-modulesBindings : Model -> Keybinding.Group Action
-modulesBindings model =
-    let
-        enterAction =
-            case model.activeLeftTab of
-                VersionsTab ->
-                    LoadDiffForVersion
-
-                _ ->
-                    FocusDocs
-    in
-    Keybinding.group "Modules"
-        [ Keybinding.binding (Tui.Character 'j') "Next module" NavigateDown
-            |> Keybinding.withAlternate (Tui.Arrow Tui.Down)
-        , Keybinding.binding (Tui.Character 'k') "Previous module" NavigateUp
-            |> Keybinding.withAlternate (Tui.Arrow Tui.Up)
-        , Keybinding.binding (Tui.Character '>') "Page down" PageDown
-            |> Keybinding.withAlternate Tui.PageDown
-        , Keybinding.binding (Tui.Character '<') "Page up" PageUp
-            |> Keybinding.withAlternate Tui.PageUp
-        , Keybinding.binding Tui.Enter "Select" enterAction
-        ]
-
-
-itemsBindings : Keybinding.Group Action
-itemsBindings =
-    Keybinding.group "Items"
-        [ Keybinding.binding (Tui.Character 'j') "Next item" NavigateDown
-            |> Keybinding.withAlternate (Tui.Arrow Tui.Down)
-        , Keybinding.binding (Tui.Character 'k') "Previous item" NavigateUp
-            |> Keybinding.withAlternate (Tui.Arrow Tui.Up)
-        , Keybinding.binding (Tui.Character '>') "Page down" PageDown
-            |> Keybinding.withAlternate Tui.PageDown
-        , Keybinding.binding (Tui.Character '<') "Page up" PageUp
-            |> Keybinding.withAlternate Tui.PageUp
-        , Keybinding.binding Tui.Enter "Jump to item" ScrollToSelectedItem
-        ]
-
-
-docsBindings : Keybinding.Group Action
-docsBindings =
-    Keybinding.group "Docs"
-        [ Keybinding.binding (Tui.Character 'j') "Scroll down" ScrollDocsDown
-            |> Keybinding.withAlternate (Tui.Arrow Tui.Down)
-        , Keybinding.binding (Tui.Character 'k') "Scroll up" ScrollDocsUp
-            |> Keybinding.withAlternate (Tui.Arrow Tui.Up)
-        , Keybinding.binding (Tui.Character ' ') "Page down" ScrollDocsPageDown
-            |> Keybinding.withAlternate (Tui.Character '>')
-        , Keybinding.binding Tui.PageDown "Page down" ScrollDocsPageDown
-        , Keybinding.binding (Tui.Character '<') "Page up" ScrollDocsPageUp
-            |> Keybinding.withAlternate Tui.PageUp
-        , Keybinding.binding (Tui.Character 'o') "Maximize" ToggleMaximize
-        , Keybinding.binding Tui.Enter "Follow link" FollowLink
-        ]
-
-
-allBindings : Model -> List (Keybinding.Group Action)
-allBindings model =
-    if model.showHelp then
-        [ helpBindings ]
-
-    else
-        let
-            focusedBindings =
-                case Layout.focusedPane model.layout of
-                    Just "docs" ->
-                        [ docsBindings ]
-
-                    Just "items" ->
-                        [ itemsBindings ]
-
-                    _ ->
-                        [ modulesBindings model ]
-        in
-        focusedBindings ++ [ globalBindings model ]
 
 
 
 -- VIEW
 
 
-view : Tui.Context -> Model -> Tui.Screen
-view ctx model =
-    let
-        contentCtx =
-            { width = ctx.width, height = ctx.height - 1 }
-
-        layoutState =
-            Layout.withContext contentCtx model.layout
-
-        statusBar =
-            renderStatusBar model ctx.width
-
-        waitingMessage =
-            if model.loadingDiff then
-                Just "Loading diff..."
-
-            else
-                Nothing
-
-        statusView =
-            Status.view { waiting = waitingMessage, tick = model.spinnerTick } model.status
-
-        bottomBar =
-            Tui.concat [ statusBar, Tui.text " ", statusView ]
-
-        layoutRows =
-            Layout.toRows layoutState (viewLayout contentCtx model)
-    in
-    case model.comparePicker of
-        Just { picker } ->
-            Modal.overlay
-                { title = Tui.Picker.title picker
-                , body = Tui.Picker.viewBody picker
-                , footer = String.fromInt (Tui.Picker.matchCount picker) ++ " versions  Enter select  Esc cancel"
-                , width = Modal.defaultWidth ctx.width
-                }
-                { width = ctx.width, height = ctx.height - 1 }
-                (layoutRows ++ [ statusBar ])
-                |> Tui.lines
-
-        Nothing ->
-            case model.packagePicker of
-                Just picker ->
-                    Modal.overlay
-                        { title = Tui.Picker.title picker
-                        , body = Tui.Picker.viewBody picker
-                        , footer = String.fromInt (Tui.Picker.matchCount picker) ++ " packages  type to filter  Enter select  Esc cancel"
-                        , width = Modal.defaultWidth ctx.width
-                        }
-                        { width = ctx.width, height = ctx.height - 1 }
-                        (layoutRows ++ [ statusBar ])
-                        |> Tui.lines
-
-                Nothing ->
-                    if model.showHelp then
-                        let
-                            helpBody =
-                                Keybinding.helpRows "" [ modulesBindings model, docsBindings, globalBindings model ]
-                        in
-                        Modal.overlay
-                            { title = "Keybindings"
-                            , body = helpBody
-                            , footer = "? close  q quit"
-                            , width = Modal.defaultWidth ctx.width
-                            }
-                            { width = ctx.width, height = ctx.height - 1 }
-                            layoutRows
-                            ++ [ statusBar ]
-                            |> Tui.lines
-
-                    else
-                        (layoutRows ++ [ bottomBar ])
-                            |> Tui.lines
-
-
-viewLayout : { a | width : Int, height : Int } -> Model -> Layout.Layout Msg
+viewLayout : Tui.Context -> Model -> Layout.Layout Msg
 viewLayout ctx model =
     Layout.horizontal
         [ modulesPane ctx model
-        , itemsPane model
+        , itemsPane ctx model
         , rightPane ctx model
         ]
-
-
-renderStatusBar : Model -> Int -> Tui.Screen
-renderStatusBar model width =
-    let
-        hints =
-                    let
-                        base =
-                            [ "j/k navigate", "? help", "q quit" ]
-
-                        hasDiff =
-                            model.diff /= Nothing
-
-                        hasVersions =
-                            not (List.isEmpty model.versions)
-
-                        diffHint =
-                            if hasDiff || hasVersions then
-                                [ "d diff" ]
-
-                            else
-                                []
-
-                        showChanges =
-                            hasDiff || hasVersions
-
-                        tabHint =
-                            case ( showChanges, hasVersions ) of
-                                ( True, True ) ->
-                                    [ "1/2/3 tabs" ]
-
-                                ( True, False ) ->
-                                    [ "1/2 tabs" ]
-
-                                ( False, True ) ->
-                                    [ "1/3 tabs" ]
-
-                                ( False, False ) ->
-                                    []
-                    in
-                    base ++ diffHint ++ tabHint
-
-        hintText =
-            String.join "  " hints
-
-        padding =
-            max 0 (width - String.length hintText)
-
-        barStyle =
-            { fg = Just Ansi.Color.black
-            , bg = Just Ansi.Color.white
-            , attributes = []
-            , hyperlink = Nothing
-            }
-    in
-    -- Show filter/search status bar if active on any pane
-    case Layout.activeFilterStatusBar model.layout of
-        Just filterBar ->
-            filterBar
-
-        Nothing ->
-            Tui.styled barStyle (hintText ++ String.repeat padding " ")
 
 
 modulesPaneWidth : Int -> Layout.Width
@@ -1554,12 +981,7 @@ modulesPaneWidth termWidth =
     Layout.fixed (min 28 (termWidth // 4))
 
 
-leftPaneTitle : Model -> String
-leftPaneTitle model =
-    "Modules"
-
-
-modulesPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
+modulesPane : Tui.Context -> Model -> Layout.Pane Msg
 modulesPane ctx model =
     let
         entries =
@@ -1571,37 +993,23 @@ modulesPane ctx model =
         showBadges =
             (model.rightView == DiffView || model.activeLeftTab == ChangesTab)
                 && model.diff /= Nothing
-    in
-    let
-        pane =
-            Layout.pane "modules"
-                { title = leftPaneTitle model
-                , width = modulesPaneWidth ctx.width
+
+        base =
+            Layout.selectableList
+                { onSelect = \entry -> SelectModule entry
+                , view = \{ selection } entry -> renderModuleEntry selection showBadges model entry
                 }
-                (let
-                    base =
-                        Layout.selectableList
-                            { onSelect = SelectEntry
-                            , selected = \entry -> renderModuleEntrySelected showBadges model entry
-                            , default = \entry -> renderModuleEntryDefault showBadges model entry
-                            }
-                            entries
+                entries
 
-                    withTree =
-                        case model.activeLeftTab of
-                            VersionsTab ->
-                                base
+        withTree =
+            case model.activeLeftTab of
+                VersionsTab ->
+                    base
 
-                            _ ->
-                                base
-                                    |> Layout.withTreeView { toPath = String.split "." } entries
-                 in
-                 withTree
-                    |> Layout.withFilterable identity entries
-                )
+                _ ->
+                    base
+                        |> Layout.withTreeView { toPath = String.split "." } entries
 
-    in
-    let
         selectedPos =
             entries
                 |> List.indexedMap Tuple.pair
@@ -1610,13 +1018,82 @@ modulesPane ctx model =
                 |> Maybe.map (\( i, _ ) -> i + 1)
                 |> Maybe.withDefault 1
     in
-    pane
-        -- Entry count shown in footer, not prefix (framework handles [1] tab number)
-        |> Layout.withFooter
-            (String.fromInt selectedPos
-                ++ " of "
-                ++ String.fromInt entryCount
+    Layout.pane "modules"
+        { title = "Modules"
+        , width = modulesPaneWidth ctx.width
+        }
+        (withTree
+            |> Layout.withFilterable identity entries
+        )
+        |> Layout.withInlineFooter
+            (Tui.text
+                (String.fromInt selectedPos
+                    ++ " of "
+                    ++ String.fromInt entryCount
+                )
+                |> Tui.dim
             )
+
+
+renderModuleEntry : Layout.SelectionState -> Bool -> Model -> String -> Tui.Screen
+renderModuleEntry selection showBadges model name =
+    let
+        badge =
+            if showBadges then
+                moduleBadge model name
+
+            else
+                Tui.empty
+    in
+    case selection of
+        Layout.Selected { focused } ->
+            Tui.concat
+                [ badge
+                , Tui.styled
+                    { fg = Just Ansi.Color.white
+                    , bg = Just Ansi.Color.blue
+                    , attributes =
+                        if focused then
+                            [ Tui.Bold ]
+
+                        else
+                            []
+                    , hyperlink = Nothing
+                    }
+                    (name ++ " ")
+                ]
+
+        Layout.NotSelected ->
+            Tui.concat
+                [ badge
+                , Tui.text name
+                ]
+
+
+moduleBadge : Model -> String -> Tui.Screen
+moduleBadge model moduleName =
+    case model.diff of
+        Just diff ->
+            case Diff.moduleStatus diff moduleName of
+                Diff.ModuleNew ->
+                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
+
+                Diff.ModuleChanged ->
+                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
+
+                Diff.ModuleRemoved ->
+                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " - "
+
+                Diff.ModuleUnchanged ->
+                    Tui.text "   "
+
+        Nothing ->
+            Tui.empty
+
+
+topEntry : String
+topEntry =
+    "⬆ Top"
 
 
 itemsForCurrentView : Model -> List String
@@ -1624,6 +1101,13 @@ itemsForCurrentView model =
     let
         name =
             model.selectedModuleName
+
+        withTop items =
+            if List.isEmpty items then
+                []
+
+            else
+                topEntry :: items
     in
     if String.isEmpty name then
         []
@@ -1636,13 +1120,13 @@ itemsForCurrentView model =
                         if List.member name diff.addedModules then
                             case findModule name model.modules of
                                 Just mod ->
-                                    moduleItemNames mod
+                                    withTop (moduleItemNames mod)
 
                                 Nothing ->
                                     []
 
                         else
-                            diffItemNames diff name
+                            withTop (diffItemNames diff name)
 
                     Nothing ->
                         []
@@ -1651,7 +1135,7 @@ itemsForCurrentView model =
                 if name == "README" then
                     case model.readme of
                         Just readmeContent ->
-                            extractHeadings readmeContent
+                            withTop (extractHeadings readmeContent)
 
                         Nothing ->
                             []
@@ -1659,7 +1143,7 @@ itemsForCurrentView model =
                 else
                     case findModule name model.modules of
                         Just mod ->
-                            moduleItemNames mod
+                            withTop (moduleItemNames mod)
 
                         Nothing ->
                             []
@@ -1673,15 +1157,14 @@ diffItemNames diff moduleName =
 
         Nothing ->
             if List.member moduleName diff.addedModules then
-                -- New module: show all items
                 []
 
             else
                 []
 
 
-itemsPane : Model -> Layout.Pane Msg
-itemsPane model =
+itemsPane : Tui.Context -> Model -> Layout.Pane Msg
+itemsPane _ model =
     let
         items =
             itemsForCurrentView model
@@ -1694,36 +1177,84 @@ itemsPane model =
         , width = Layout.fixed 20
         }
         (Layout.selectableList
-            { onSelect = SelectItem
-            , selected =
-                \name ->
-                    Tui.styled
-                        { fg = Just Ansi.Color.white
-                        , bg = Just Ansi.Color.blue
-                        , attributes = [ Tui.Bold ]
-                        , hyperlink = Nothing
-                        }
-                        (name ++ " ")
-            , default =
-                \name ->
-                    if String.startsWith "# " name then
-                        Tui.text name |> Tui.dim |> Tui.bold
-
-                    else
-                        Tui.text name
+            { onSelect = \item -> SelectItemByName item
+            , view = \{ selection } item -> renderItemEntry selection item
             }
             items
-            |> Layout.withFilterable identity items
         )
-        |> Layout.withFooter
+        |> Layout.withInlineFooter
             (if itemCount > 0 then
-                String.fromInt (Layout.selectedIndex "items" model.layout + 1)
-                    ++ " of "
-                    ++ String.fromInt itemCount
+                Tui.text
+                    (String.fromInt (model.selectedItemIndex + 1)
+                        ++ " of "
+                        ++ String.fromInt itemCount
+                    )
+                    |> Tui.dim
 
              else
-                ""
+                Tui.empty
             )
+
+
+renderItemEntry : Layout.SelectionState -> String -> Tui.Screen
+renderItemEntry selection name =
+    case selection of
+        Layout.Selected { focused } ->
+            Tui.styled
+                { fg = Just Ansi.Color.white
+                , bg = Just Ansi.Color.blue
+                , attributes =
+                    if focused then
+                        [ Tui.Bold ]
+
+                    else
+                        []
+                , hyperlink = Nothing
+                }
+                (name ++ " ")
+
+        Layout.NotSelected ->
+            if String.startsWith "# " name then
+                Tui.text name |> Tui.dim |> Tui.bold
+
+            else
+                Tui.text name
+
+
+syncItemsToScrollAt : Int -> Model -> Model
+syncItemsToScrollAt scrollOffset model =
+    if List.isEmpty model.itemLinePositions then
+        model
+
+    else if scrollOffset == 0 then
+        -- At the very top → select "⬆ Top"
+        { model | selectedItemIndex = 0 }
+
+    else
+        let
+            anchor =
+                scrollOffset + 3
+
+            -- Find which item position we've scrolled past
+            rawIndex =
+                model.itemLinePositions
+                    |> List.indexedMap Tuple.pair
+                    |> List.foldl
+                        (\( idx, ( _, linePos ) ) best ->
+                            if linePos <= anchor then
+                                idx
+
+                            else
+                                best
+                        )
+                        -1
+
+            -- +1 to account for "⬆ Top" at index 0
+            -- rawIndex -1 means we haven't reached the first item → select Top (index 0)
+            bestIndex =
+                rawIndex + 1
+        in
+        { model | selectedItemIndex = bestIndex }
 
 
 rightPaneCacheKey : Int -> Model -> String
@@ -1731,66 +1262,8 @@ rightPaneCacheKey wrapWidth model =
     docsContentCacheKey model ++ ":" ++ String.fromInt wrapWidth
 
 
-syncItemsToScroll : Model -> Model
-syncItemsToScroll model =
-    if List.isEmpty model.itemLinePositions then
-        model
-
-    else
-    let
-        scrollOffset =
-            Layout.scrollPosition "docs" model.layout
-
-        anchor =
-            scrollOffset + 3
-
-        bestIndex =
-            model.itemLinePositions
-                |> List.indexedMap Tuple.pair
-                |> List.foldl
-                    (\( idx, ( _, linePos ) ) best ->
-                        if linePos <= anchor then
-                            idx
-
-                        else
-                            best
-                    )
-                    0
-    in
-    { model | layout = Layout.setSelectedIndex "items" bestIndex model.layout }
-
-
-extractInternalLinks : List Tui.Screen -> List { line : Int, destination : String, text : String }
-extractInternalLinks lines =
-    lines
-        |> List.indexedMap
-            (\idx line ->
-                let
-                    text =
-                        Tui.toString line
-                in
-                -- Look for magenta underlined text (our internal link style)
-                -- We can't perfectly detect styled regions from toString,
-                -- but we can scan the module comment for link destinations
-                -- For now, return empty - will populate from module comment
-                []
-            )
-        |> List.concat
-
-
-findLinkLine : String -> List Tui.Screen -> Int
-findLinkLine linkText lines =
-    lines
-        |> List.indexedMap Tuple.pair
-        |> List.filter (\( _, line ) -> String.contains linkText (Tui.toString line))
-        |> List.head
-        |> Maybe.map Tuple.first
-        |> Maybe.withDefault -1
-
-
 extractLinksFromComment : String -> List { destination : String, text : String }
 extractLinksFromComment comment =
-    -- Parse markdown links: [text](destination) where destination doesn't start with http
     comment
         |> String.split "["
         |> List.drop 1
@@ -1816,6 +1289,16 @@ extractLinksFromComment comment =
             )
 
 
+findLinkLine : String -> List Tui.Screen -> Int
+findLinkLine linkText lines =
+    lines
+        |> List.indexedMap Tuple.pair
+        |> List.filter (\( _, line ) -> String.contains linkText (Tui.toString line))
+        |> List.head
+        |> Maybe.map Tuple.first
+        |> Maybe.withDefault -1
+
+
 preRenderAllModules : Int -> List Docs.Module -> Dict.Dict String { lines : List Tui.Screen, items : List String, itemPositions : List ( String, Int ) }
 preRenderAllModules wrapWidth modules =
     modules
@@ -1838,24 +1321,19 @@ preRenderAllModules wrapWidth modules =
         |> Dict.fromList
 
 
-refreshRightPaneCache : Model -> Model
-refreshRightPaneCache model =
+refreshRightPaneCache : Tui.Context -> Model -> Model
+refreshRightPaneCache ctx model =
     let
-        ctx =
-            Layout.contextOf model.layout
-
         wrapWidth =
             docsPaneWidth ctx - 2
 
         key =
             rightPaneCacheKey wrapWidth model
-    in
-    let
+
         buildAndCachePositions m =
             let
-                -- Check if we have a pre-rendered version
                 selectedName =
-                    case selectedEntryName m of
+                    case selectedEntryNameFromModel m of
                         Just name ->
                             name
 
@@ -1867,7 +1345,6 @@ refreshRightPaneCache model =
             in
             case preRendered of
                 Just rendered ->
-                    -- Use pre-rendered content (instant!)
                     { m
                         | cachedRightPane =
                             Just
@@ -1880,10 +1357,9 @@ refreshRightPaneCache model =
                     }
 
                 Nothing ->
-                    -- Fall back to rendering on demand
                     let
                         fallbackName =
-                            case selectedEntryName m of
+                            case selectedEntryNameFromModel m of
                                 Just name ->
                                     name
 
@@ -1935,7 +1411,7 @@ buildRightPaneCache : Int -> Model -> String -> { key : String, title : String, 
 buildRightPaneCache wrapWidth model key =
     case model.rightView of
         DocsView ->
-            case selectedEntryName model of
+            case selectedEntryNameFromModel model of
                 Just name ->
                     if name == "README" then
                         case model.readme of
@@ -1994,7 +1470,7 @@ buildRightPaneCache wrapWidth model key =
                                     ]
 
                                 entryDiffLines =
-                                    case selectedEntryName model of
+                                    case selectedEntryNameFromModel model of
                                         Just name ->
                                             if name == "README" then
                                                 renderReadmeDiff diff
@@ -2019,14 +1495,12 @@ buildRightPaneCache wrapWidth model key =
 orderVersions : String -> String -> ( String, String )
 orderVersions a b =
     if a == "HEAD" then
-        -- HEAD is always newer
         ( b, "HEAD" )
 
     else if b == "HEAD" then
         ( a, "HEAD" )
 
     else
-        -- Compare semver: older version first
         case compareVersionStrings a b of
             GT ->
                 ( b, a )
@@ -2069,7 +1543,7 @@ docsContentCacheKey : Model -> String
 docsContentCacheKey model =
     let
         entryName =
-            case selectedEntryName model of
+            case selectedEntryNameFromModel model of
                 Just name ->
                     name
 
@@ -2087,8 +1561,8 @@ docsContentCacheKey model =
     viewKey ++ ":" ++ entryName
 
 
-currentDocsContent : Model -> List Tui.Screen
-currentDocsContent model =
+currentDocsContent : Layout.UpdateContext -> Model -> List Tui.Screen
+currentDocsContent ctx model =
     let
         key =
             docsContentCacheKey model
@@ -2099,17 +1573,17 @@ currentDocsContent model =
                 cached.content
 
             else
-                buildDocsContent model
+                buildDocsContent ctx model
 
         Nothing ->
-            buildDocsContent model
+            buildDocsContent ctx model
 
 
-buildDocsContent : Model -> List Tui.Screen
-buildDocsContent model =
+buildDocsContent : Layout.UpdateContext -> Model -> List Tui.Screen
+buildDocsContent ctx model =
     let
         width =
-            (Layout.contextOf model.layout).width
+            ctx.context.width
     in
     case model.rightView of
         DocsView ->
@@ -2121,7 +1595,7 @@ buildDocsContent model =
                     []
 
         DiffView ->
-            case ( model.diff, selectedEntryName model ) of
+            case ( model.diff, selectedEntryNameFromModel model ) of
                 ( Just diff, Just name ) ->
                     if name == "README" then
                         renderReadmeDiff diff
@@ -2137,16 +1611,10 @@ buildDocsContent model =
 findAllItemLines : List String -> List Tui.Screen -> List ( String, Int )
 findAllItemLines items lines =
     let
-        -- Build a set of items we're looking for (for quick membership check)
-        itemSet =
-            items
-
-        -- Pre-convert all lines to strings once
         indexedTextLines =
             lines
                 |> List.indexedMap (\idx line -> ( idx, Tui.toString line ))
 
-        -- For each item, find its line position
         findItem itemName =
             let
                 headingText =
@@ -2154,8 +1622,6 @@ findAllItemLines items lines =
 
                 matchLine ( _, text ) =
                     if String.startsWith "# " itemName then
-                        -- Match heading: look for the heading text in rendered content
-                        -- Use the first significant words to avoid partial matches
                         String.contains headingText text
                             && String.contains "##" text
 
@@ -2173,7 +1639,7 @@ findAllItemLines items lines =
                 |> Maybe.map (\( idx, _ ) -> ( itemName, idx ))
                 |> Maybe.withDefault ( itemName, 0 )
     in
-    List.map findItem itemSet
+    List.map findItem items
 
 
 findLineForItem : String -> List Tui.Screen -> Int
@@ -2187,13 +1653,10 @@ findLineForItem itemName lines =
                         Tui.toString line
                 in
                 if String.startsWith "# " itemName then
-                    -- Section heading: look for heading text in rendered content
                     String.contains (String.dropLeft 2 itemName) text
                         && String.contains "##" text
 
                 else
-                    -- Match definitions: item name must appear right after the gutter
-                    -- "┃ xs : Radius" matches but "┃     { xs : Float" does not
                     String.contains ("┃ " ++ itemName ++ " :") text
                         || String.contains ("┃ " ++ itemName ++ " =") text
                         || String.contains ("┃ type " ++ itemName ++ " ") text
@@ -2247,9 +1710,6 @@ extractHeadings markdown =
             )
 
 
-{-| Strip inline markdown formatting from text.
-Removes backticks, link syntax [text](url) → text, and bold/italic markers.
--}
 stripMarkdownInline : String -> String
 stripMarkdownInline text =
     text
@@ -2259,8 +1719,6 @@ stripMarkdownInline text =
         |> String.replace "__" ""
 
 
-{-| Strip markdown link syntax: [text](url) → text
--}
 stripLinks : String -> String
 stripLinks text =
     case String.split "[" text of
@@ -2290,65 +1748,6 @@ stripLinks text =
                     )
 
 
-renderModuleEntrySelected : Bool -> Model -> String -> Tui.Screen
-renderModuleEntrySelected showBadges model name =
-    let
-        badge =
-            if showBadges then
-                moduleBadge model name
-
-            else
-                Tui.empty
-    in
-    Tui.concat
-        [ badge
-        , Tui.styled
-            { fg = Just Ansi.Color.white
-            , bg = Just Ansi.Color.blue
-            , attributes = [ Tui.Bold ]
-            , hyperlink = Nothing
-            }
-            (name ++ " ")
-        ]
-
-
-renderModuleEntryDefault : Bool -> Model -> String -> Tui.Screen
-renderModuleEntryDefault showBadges model name =
-    let
-        badge =
-            if showBadges then
-                moduleBadge model name
-
-            else
-                Tui.empty
-    in
-    Tui.concat
-        [ badge
-        , Tui.text name
-        ]
-
-
-moduleBadge : Model -> String -> Tui.Screen
-moduleBadge model moduleName =
-    case model.diff of
-        Just diff ->
-            case Diff.moduleStatus diff moduleName of
-                Diff.ModuleNew ->
-                    Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " + "
-
-                Diff.ModuleChanged ->
-                    Tui.styled { fg = Just Ansi.Color.yellow, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " ~ "
-
-                Diff.ModuleRemoved ->
-                    Tui.styled { fg = Just Ansi.Color.red, bg = Nothing, attributes = [ Tui.Bold ], hyperlink = Nothing } " - "
-
-                Diff.ModuleUnchanged ->
-                    Tui.text "   "
-
-        Nothing ->
-            Tui.empty
-
-
 
 -- RIGHT PANE
 
@@ -2368,7 +1767,7 @@ docsPaneWidth ctx =
     max 20 (ctx.width - modulesWidth - itemsWidth - borders)
 
 
-rightPane : { a | width : Int, height : Int } -> Model -> Layout.Pane Msg
+rightPane : Tui.Context -> Model -> Layout.Pane Msg
 rightPane ctx model =
     if model.loadingDiff then
         Layout.pane "docs"
@@ -2385,7 +1784,6 @@ rightPane ctx model =
             wrapWidth =
                 docsPaneWidth ctx - 2
 
-            -- Use cached content only — never rebuild in view (too expensive)
             cached =
                 case model.cachedRightPane of
                     Just c ->
@@ -2401,78 +1799,7 @@ rightPane ctx model =
             (Layout.content cached.lines
                 |> Layout.withSearchable
             )
-            |> withScrollPercentFooter model cached.lines
-
-
-
-cappedScrollDown : Model -> Int -> Layout.State
-cappedScrollDown model delta =
-    let
-        ctx =
-            Layout.contextOf model.layout
-
-        contentLines =
-            case model.cachedRightPane of
-                Just cached ->
-                    List.length cached.lines
-
-                Nothing ->
-                    1000
-
-        visibleHeight =
-            ctx.height - 2
-
-        currentOffset =
-            Layout.scrollPosition "docs" model.layout
-
-        maxOffset =
-            max 0 (contentLines - visibleHeight)
-
-        clampedDelta =
-            min delta (max 0 (maxOffset - currentOffset))
-    in
-    Layout.scrollDown "docs" clampedDelta model.layout
-
-
-withScrollPercentFooter : Model -> List Tui.Screen -> Layout.Pane Msg -> Layout.Pane Msg
-withScrollPercentFooter model contentLines pane =
-    let
-        ctx =
-            Layout.contextOf model.layout
-
-        totalLines =
-            List.length contentLines
-
-        visibleHeight =
-            ctx.height - 2
-
-        scrollOffset =
-            Layout.scrollPosition "docs" model.layout
-
-        percent =
-            if totalLines <= visibleHeight then
-                ""
-
-            else
-                String.fromInt (min 100 (scrollOffset * 100 // max 1 (totalLines - visibleHeight))) ++ "%"
-    in
-    if String.isEmpty percent then
-        pane
-
-    else
-        pane
-            |> Layout.withFooterScreen
-                (Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } percent)
-
-
-
-wrapLines : Int -> List Tui.Screen -> List Tui.Screen
-wrapLines maxWidth lines =
-    if maxWidth <= 0 then
-        lines
-
-    else
-        List.concatMap (Tui.wrapWidth maxWidth) lines
+            |> Layout.withOnScroll DocsPaneScrolled
 
 
 
@@ -2484,9 +1811,6 @@ renderModuleDocs wrapWidth mod =
     renderModuleDocsWithGutter wrapWidth Ansi.Color.brightBlack mod
 
 
-{-| Render module docs and return both lines AND item positions.
-Positions are computed by counting lines during rendering — no string searching.
--}
 renderModuleDocsWithPositions : Int -> Docs.Module -> { lines : List Tui.Screen, positions : List ( String, Int ) }
 renderModuleDocsWithPositions wrapWidth mod =
     let
@@ -2499,7 +1823,6 @@ renderModuleDocsWithPositions wrapWidth mod =
             , Tui.text ""
             ]
 
-        -- Fold over blocks, accumulating lines and positions with running line count
         result =
             List.foldl
                 (\block acc ->
@@ -2545,7 +1868,6 @@ renderModuleDocsWithPositions wrapWidth mod =
                         newPositions =
                             case block of
                                 Docs.MarkdownBlock markdown ->
-                                    -- Find each heading's actual line within the rendered block
                                     let
                                         headings =
                                             extractHeadings markdown
@@ -2558,7 +1880,6 @@ renderModuleDocsWithPositions wrapWidth mod =
                                             List.foldl
                                                 (\heading posAcc ->
                                                     let
-                                                        -- Search rendered block lines for this heading's text
                                                         headingText =
                                                             String.dropLeft 2 heading
 
@@ -2842,7 +2163,6 @@ renderDocComment wrapWidth comment =
             |> List.map (indentScreen "    ")
 
     else
-        -- Fast path: plain text, no markdown parsing needed
         Tui.text ""
             :: (trimmed
                     |> String.lines
@@ -2852,12 +2172,18 @@ renderDocComment wrapWidth comment =
             |> List.map (indentScreen "    ")
 
 
-{-| Indent a screen line by prepending a string. For concat/styled screens
-this prepends to the first element; for text it prepends directly.
--}
 indentScreen : String -> Tui.Screen -> Tui.Screen
 indentScreen prefix screen =
     Tui.concat [ Tui.text prefix, screen ]
+
+
+wrapLines : Int -> List Tui.Screen -> List Tui.Screen
+wrapLines maxWidth lines =
+    if maxWidth <= 0 then
+        lines
+
+    else
+        List.concatMap (Tui.wrapWidth maxWidth) lines
 
 
 
@@ -2876,20 +2202,11 @@ renderMarkdownToScreens markdown =
             List.concat rendered
 
         Err _ ->
-            -- Fallback: raw text
             markdown
                 |> String.lines
                 |> List.map Tui.text
 
 
-{-| The markdown renderer produces `List Tui.Screen` per block.
-
-Inline elements (text, codeSpan, strong, link, etc.) each return a single-element
-list containing one `Tui.Screen` fragment. Block elements (paragraph, heading,
-list) concat all inline children into a single line via `Tui.concat`, then return
-that as a `List Tui.Screen` (possibly multiple lines for lists/blockquotes).
-
--}
 tuiRenderer : Renderer (List Tui.Screen)
 tuiRenderer =
     { heading = tuiHeading
@@ -2917,9 +2234,6 @@ tuiRenderer =
     }
 
 
-{-| Flatten inline children (from the markdown renderer) into a single plain string.
-Used when we need to wrap the combined text in a single Tui.styled call.
--}
 inlineChildrenToString : List (List Tui.Screen) -> String
 inlineChildrenToString children =
     children
@@ -2928,10 +2242,6 @@ inlineChildrenToString children =
         |> String.join ""
 
 
-{-| Combine inline children into a single Tui.Screen by concatenating fragments.
-This is the key to keeping paragraph text on one line instead of splitting each
-inline element onto its own line.
--}
 flattenInlineChildren : List (List Tui.Screen) -> Tui.Screen
 flattenInlineChildren children =
     Tui.concat (List.concat children)
@@ -2998,8 +2308,6 @@ tuiLink { destination } children =
         ]
 
     else
-        -- Internal Elm doc link: #definition or Module#definition
-        -- Use magenta + underline to distinguish from code spans (cyan)
         [ Tui.text linkText
             |> Tui.fg Ansi.Color.magenta
             |> Tui.underline
@@ -3031,7 +2339,6 @@ tuiUnorderedList items =
                         CompletedTask ->
                             Tui.styled { fg = Just Ansi.Color.green, bg = Nothing, attributes = [], hyperlink = Nothing } "  [x] "
 
-                -- Flatten all children into one line per item
                 childContent =
                     flattenInlineChildren children
             in
@@ -3546,31 +2853,3 @@ renderUnifiedDiffLines diffText =
                 else
                     Tui.styled { fg = Just Ansi.Color.brightBlack, bg = Nothing, attributes = [], hyperlink = Nothing } ("    " ++ line)
             )
-
-
-
--- SUBSCRIPTIONS
-
-
-subscriptions : Model -> Tui.Sub.Sub Msg
-subscriptions model =
-    let
-        waitingMessage =
-            if model.loadingDiff then
-                Just "Loading diff..."
-
-            else
-                Nothing
-    in
-    Tui.Sub.batch
-        ([ Tui.Sub.onKeyPress KeyPressed
-         , Tui.Sub.onMouse MouseEvent
-         , Tui.Sub.onContext GotContext
-         ]
-            ++ (if Status.hasActivity { waiting = waitingMessage } model.status then
-                    [ Tui.Sub.every 100 Tick ]
-
-                else
-                    []
-               )
-        )

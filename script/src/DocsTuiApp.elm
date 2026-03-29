@@ -29,6 +29,7 @@ import Json.Encode as Encode
 import Pages.Script as Script exposing (Script)
 import Regex
 import Tui.Effect as Effect
+import Tui.Layout as Layout
 
 
 type alias CliOptions =
@@ -77,14 +78,11 @@ parseDiffMode maybeDiff =
 
 run : Script
 run =
-    Script.tuiWithCliOptions program
+    Script.tuiAppWithCliOptions program
         (\options ->
             { data =
                 loadDocsWithOptionalDiff options
-            , init = DocsTui.init
-            , update = DocsTui.update
-            , view = DocsTui.view
-            , subscriptions = DocsTui.subscriptions
+            , app = Layout.compileApp DocsTui.appConfig
             }
         )
 
@@ -110,6 +108,7 @@ loadDocsWithOptionalDiff :
             , dependencies : List String
             , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
             , readme : Maybe String
+            , packageVersion : Maybe String
             }
 loadDocsWithOptionalDiff options =
     Script.command "pwd" []
@@ -137,6 +136,7 @@ loadDocsInDir :
             , dependencies : List String
             , loadPackageDocs : String -> BackendTask FatalError (List Docs.Module)
             , readme : Maybe String
+            , packageVersion : Maybe String
             }
 loadDocsInDir options =
     readElmJson
@@ -185,6 +185,7 @@ loadDocsInDir options =
                                                     , dependencies = allPackageNames
                                                     , loadPackageDocs = buildLoadPackageDocs
                                                     , readme = readmeResult
+                                                    , packageVersion = elmJson.packageVersion
                                                     }
 
                                             Just _ ->
@@ -205,6 +206,7 @@ loadDocsInDir options =
                                                             , dependencies = allPackageNames
                                                             , loadPackageDocs = buildLoadPackageDocs
                                                             , readme = readmeResult
+                                                            , packageVersion = elmJson.packageVersion
                                                             }
                                                         )
                                     )
@@ -282,10 +284,20 @@ buildCurrentDocs elmJson =
 buildCurrentDocsUncached : ElmJson -> BackendTask FatalError String
 buildCurrentDocsUncached elmJson =
     if elmJson.projectType == "package" then
-        Script.exec "elm" [ "make", "--docs=docs.json" ]
-            |> BackendTask.quiet
+        Script.command "elm" [ "make", "--docs=docs.json" ]
+            |> BackendTask.onError
+                (\_ ->
+                    BackendTask.fail
+                        (FatalError.fromString
+                            ("Failed to build docs. Run `elm make --docs=docs.json` to see the full error.\n\n"
+                                ++ "Common causes:\n"
+                                ++ "  - Compilation errors in your Elm code\n"
+                                ++ "  - Exposed values missing @docs annotations in module comments\n"
+                            )
+                        )
+                )
             |> BackendTask.andThen
-                (\() ->
+                (\_ ->
                     BackendTask.File.rawFile "docs.json"
                         |> BackendTask.allowFatal
                 )
@@ -531,10 +543,16 @@ buildDocsInWorktree tempDir elmJson =
                 case Decode.decodeString elmJsonDecoder worktreeElmJsonStr of
                     Ok worktreeElmJson ->
                         if worktreeElmJson.projectType == "package" then
-                            Script.exec "bash" [ "-c", "cd '" ++ tempDir ++ "' && elm make --docs=docs.json" ]
-                                |> BackendTask.quiet
+                            Script.command "bash" [ "-c", "cd '" ++ tempDir ++ "' && elm make --docs=docs.json" ]
+                                |> BackendTask.onError
+                                    (\_ ->
+                                        BackendTask.fail
+                                            (FatalError.fromString
+                                                ("Failed to build docs for ref. Run `elm make --docs=docs.json` to see the full error.")
+                                            )
+                                    )
                                 |> BackendTask.andThen
-                                    (\() ->
+                                    (\_ ->
                                         BackendTask.File.rawFile (tempDir ++ "/docs.json")
                                             |> BackendTask.allowFatal
                                     )
